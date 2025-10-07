@@ -1,8 +1,6 @@
 # PondEyes
 
-**PondEyes** is a Python-based visualization tool for real-time tracking of human position and motion using low-cost millimeter-wave radar modules such as the **Hi-Link HTK-2450**.  
-It runs on macOS and Linux, using **PyGame** to render a top-down map view of a physical space (e.g., a room or hallway) and displays moving targets based on radar data.  
-The system supports both **Serial (UART)** and **MQTT** input, logs all targets to CSV, and includes a full playback GUI for reviewing recorded sessions.
+**PondEyes** is a Python-based visualization tool for real-time tracking of human position and motion using low-cost millimeter-wave radar modules such as the **Hi-Link HTK-2450**. It runs on macOS and Linux, using **PyGame** to render a top-down map view of a physical space (e.g., a room or hallway) and displays moving targets based on radar data. The system supports both **Serial (UART)** and **MQTT** input, logs all targets to CSV, and includes a full playback GUI for reviewing recorded sessions.
 
 ---
 
@@ -24,7 +22,7 @@ It is designed around modular components, each in the `radar/` directory, with a
 - Full playback window for reviewing tracked movement
 
 ---
-
+PondEyes Development Demonstration (YouTube):
 [![Watch the video](https://img.youtube.com/vi/FxQKXyqbS6g/maxresdefault.jpg)](https://youtu.be/FxQKXyqbS6g)
 
 ---
@@ -63,8 +61,8 @@ PondEyes/
 ### Installation Commands
 
 ```bash
-git clone https://github.com/davidkarnowskipond-eyes.git
-cd pond-eyes
+git clone https://github.com/davidkarnowski/PondEyes.git
+cd PondEyes
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
