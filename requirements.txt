@@ -1,0 +1,4 @@
+pygame
+paho-mqtt
+pyserial
+cairosvg
