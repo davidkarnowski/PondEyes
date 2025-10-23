@@ -70,7 +70,16 @@ pip install -r requirements.txt
 
 ---
 
-## Hardware: Hi-Link HTK-2450 Radar
+## Hardware: 
+The following hardware chains were used in the development of this project:
+
+Direct Serial Connection:
+HTK-LD2450 -> FT232 UART to USB Adapter -> MacOS 15 & Ubuntu 24.04 LTS
+
+MQTT Connection:
+HTK-LD2450 -> FT232 UART to USB Adapter -> Raspberry Pi Zero -> LAN
+
+### Hi-Link HTK-LD2450 24 Ghz MM-Wave Radar Module
 
 | Specification | Value |
 |----------------|-------|
@@ -85,6 +94,12 @@ This module provides position (X, Y) and velocity data for up to three simultane
 It can penetrate non-metallic materials and operate under variable lighting conditions.
 
 Product page: [https://www.hlktech.net/index.php?id=1157](https://www.hlktech.net/index.php?id=1157)
+
+### DSD TECH SH-U09C USB to TTL Serial Adapter with FTDI FT232RL Chip
+
+For direct serial connection testing a USB to USB (TTL) adapter was used and connected to three different systems including an M1 Macbook Pro, Acer Chromebook (running Ubuntu 24.04 LTS) and a Raspberry Pi Zero
+
+Product page: [https://www.amazon.com/dp/B07BBPX8B8](https://www.deshide.com/product-details_SH-U09C.html)
 
 ---
 
