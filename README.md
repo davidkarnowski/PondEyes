@@ -97,7 +97,7 @@ Product page: [https://www.hlktech.net/index.php?id=1157](https://www.hlktech.ne
 
 ### DSD TECH SH-U09C USB to TTL Serial Adapter with FTDI FT232RL Chip
 
-For direct serial connection testing a USB to USB (TTL) adapter was used and connected to three different systems including an M1 Macbook Pro, Acer Chromebook (running Ubuntu 24.04 LTS) and a Raspberry Pi Zero
+For direct serial connection testing a UART to USB (TTL) adapter was used and connected to three different systems including an M1 Macbook Pro, Acer Chromebook (running Ubuntu 24.04 LTS) and a Raspberry Pi Zero
 
 Product page: [https://www.amazon.com/dp/B07BBPX8B8](https://www.deshide.com/product-details_SH-U09C.html)
 
