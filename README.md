@@ -74,12 +74,12 @@ pip install -r requirements.txt
 The following hardware chains were used in the development of this project:
 
 Direct Serial Connection:
-HTK-LD2450 -> FT232 UART to USB Adapter -> MacOS 15 & Ubuntu 24.04 LTS
+HLK-LD2450 -> FT232 UART to USB Adapter -> MacOS 15 & Ubuntu 24.04 LTS
 
 MQTT Connection:
-HTK-LD2450 -> FT232 UART to USB Adapter -> Raspberry Pi Zero -> LAN
+HLK-LD2450 -> FT232 UART to USB Adapter -> Raspberry Pi Zero -> LAN
 
-### Hi-Link HTK-LD2450 24 Ghz MM-Wave Radar Module
+### Hi-Link HLK-LD2450 24 Ghz MM-Wave Radar Module
 
 | Specification | Value |
 |----------------|-------|
