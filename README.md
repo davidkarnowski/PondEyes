@@ -1,6 +1,6 @@
 # PondEyes
 
-**PondEyes** is a Python-based visualization tool for real-time tracking of human position and motion using low-cost millimeter-wave radar modules such as the **Hi-Link HTK-2450**. It runs on macOS and Linux, using **PyGame** to render a top-down map view of a physical space (e.g., a room or hallway) and displays moving targets based on radar data. The system supports both **Serial (UART)** and **MQTT** input, logs all targets to CSV, and includes a full playback GUI for reviewing recorded sessions.
+**PondEyes** is a Python-based visualization tool for real-time tracking of human position and motion using low-cost millimeter-wave radar modules such as the **Hi-Link HLK-2450**. It runs on macOS and Linux, using **PyGame** to render a top-down map view of a physical space (e.g., a room or hallway) and displays moving targets based on radar data. The system supports both **Serial (UART)** and **MQTT** input, logs all targets to CSV, and includes a full playback GUI for reviewing recorded sessions.
 
 ---
 
@@ -38,7 +38,7 @@ PondEyes/
 │   ├── gui.py              # Live visualization GUI (PyGame main window)
 │   ├── mqtt_client.py      # MQTT frame receiver and parser
 │   ├── playback_gui.py     # CSV track playback GUI
-│   ├── serial_reader.py    # Serial interface reader for LD2450/HTK-2450
+│   ├── serial_reader.py    # Serial interface reader for LD2450/HLK-LD2450
 │   ├── sound.py            # Distance and velocity-based audio tones
 │   ├── svg_utils.py        # SVG rasterization and coordinate fitting
 │   ├── tracking.py         # Target bookkeeping and per-track CSV writing
