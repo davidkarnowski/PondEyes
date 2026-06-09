@@ -316,14 +316,18 @@ class RadarEngine:
         return s
 
     def apply_sensors(self, sensor_dicts: list):
-        # Replace the whole sensor set from a list of dicts (the web config form), re-upsert, and
-        # restart readers. Keeps sensors_by_id + per-sensor live-state in sync.
-        self.sensors = [Sensor.from_dict(d) for d in sensor_dicts]
-        self.sensors_by_id = {s.id: s for s in self.sensors}
-        self.latest_by_sensor = {s.id: [] for s in self.sensors}
-        self.stats_by_sid = {
-            s.id: {"count": 0, "times": collections.deque(maxlen=30), "last_hex": "", "t_last": 0.0}
-            for s in self.sensors}
+        # Replace the whole sensor set from a list of dicts (a config form on EITHER UI), re-upsert,
+        # and restart readers. Safe under concurrent UIs (pygame main thread + web request thread):
+        # stop the readers first (so no _on_frame races the swap), swap the live state under the
+        # lock, then reopen. Keeps sensors_by_id + per-sensor live-state in sync.
+        self._close_inputs()
+        with self._lock:
+            self.sensors = [Sensor.from_dict(d) for d in sensor_dicts]
+            self.sensors_by_id = {s.id: s for s in self.sensors}
+            self.latest_by_sensor = {s.id: [] for s in self.sensors}
+            self.stats_by_sid = {
+                s.id: {"count": 0, "times": collections.deque(maxlen=30), "last_hex": "", "t_last": 0.0}
+                for s in self.sensors}
         for s in self.sensors:
             self.store.upsert_sensor(s.to_dict())
         self.cfg["sensors"] = [s.to_dict() for s in self.sensors]
