@@ -239,8 +239,8 @@ function applyEditDrag(cx, cy) {
   const d = state.editDrag, s = sensorById(d.id); if (!s) return;
   if (d.type === "move") { const [wx, wy] = view.pxToWorld(cx, cy); state.override = { id: d.id, x: wx, y: wy }; d.moved = true; }
   else if (d.type === "aim") { const [mx, my] = markerPx(s); const hd = Math.atan2(cx - mx, -(cy - my)) * 180 / Math.PI; state.override = { id: d.id, heading: ((hd + 540) % 360) - 180 }; }
-  else { const [mx, my] = markerPx(s); const mm = Math.max(0, Math.hypot(cx - mx, cy - my) / view.ppm);
-         state.override = { id: d.id, [d.type === "max" ? "max_range_mm" : "min_range_mm"]: mm }; }
+  else { const [mx, my] = markerPx(s); const mm = Math.max(0, Math.min(8000, Math.hypot(cx - mx, cy - my) / view.ppm));
+         state.override = { id: d.id, [d.type === "max" ? "max_range_mm" : "min_range_mm"]: mm }; }   // cap at 8 m
 }
 async function commitEditDrag() {
   const d = state.editDrag; state.editDrag = null;
@@ -299,7 +299,7 @@ function beep(snap, now) {
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   if (e.ctrlKey || e.metaKey) {                          // pinch-zoom (browsers send pinch as wheel+ctrl)
-    view.zoomAbout(Math.pow(1.0025, -e.deltaY), e.clientX, e.clientY);
+    view.zoomAbout(Math.pow(1.012, -e.deltaY), e.clientX, e.clientY);   // ~5x more zoom per gesture
   } else {                                                // two-finger scroll -> pan
     view.panBy(-e.deltaX, -e.deltaY);
   }
@@ -404,8 +404,8 @@ function sensorCard(s) {
   f.posx = mkInput("number", s.position ? s.position[0] : 0);
   f.posy = mkInput("number", s.position ? s.position[1] : 0);
   f.head = mkInput("number", s.heading ?? 0);
-  f.min = mkInput("number", (s.min_range_mm || 0) / 1000, { step: 0.1 });
-  f.max = mkInput("number", (s.max_range_mm || 0) / 1000, { step: 0.1 });
+  f.min = mkInput("number", (s.min_range_mm || 0) / 1000, { step: 0.1, min: 0, max: 8 });
+  f.max = mkInput("number", (s.max_range_mm || 0) / 1000, { step: 0.1, min: 0, max: 8 });   // 8 m design max
   f.sens = mkInput("range", s.speed_sensitivity ?? 0.25, { min: 0, max: 1, step: 0.01 });
   const hd = document.createElement("div"); hd.className = "card-head";
   const title = document.createElement("strong"); title.textContent = s.id;
