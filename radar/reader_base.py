@@ -121,7 +121,10 @@ class FakeReader(Reader):
         while not self._stop.is_set():
             now = time.monotonic()
             self._emit_at(now - t0, now)         # trajectory time is relative; STAMP is absolute
-            time.sleep(period)
+            # Interruptible sleep: stop() sets the event and this returns immediately, so the
+            # thread halts promptly (no emit lands after stop()/store close). Falls through on timeout.
+            if self._stop.wait(period):
+                break
 
     def _emit_at(self, traj_t: float, stamp: float) -> None:
         # Build a frame from the trajectory at `traj_t`, then deliver it in the SAME shape a real

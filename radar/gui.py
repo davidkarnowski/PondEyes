@@ -34,10 +34,8 @@ from radar import geometry
 from radar import render
 from radar.svg_utils import fit_svg
 from radar.sensors import Sensor, DEFAULT_PALETTE
-from radar.reader_base import make_reader, stop_all_readers
 from radar.serial_reader import probe_baud
-from radar.store import TrackStore
-from radar.tracking import Tracker, split_speed_for
+from radar.engine import RadarEngine
 from radar.widgets import ColorPicker
 from radar.sound import beep
 from radar.logging_setup import get_logger
@@ -45,8 +43,10 @@ from radar.logging_setup import get_logger
 log = get_logger("gui")
 
 
-class RadarGUI:
-    MAX_V, FOV_DEG   = 4000, 120        # speed cap for colour / beep; radar FOV°
+class RadarGUI(RadarEngine):
+    # Inherits the headless RadarEngine (readers, tracker, store, live snapshot, smoothing, gates);
+    # this class adds ONLY the pygame window, rendering, and interaction. MAX_V / FOV_DEG come
+    # from the engine.
     DATA_TIMEOUT_SEC = 1.0              # gap (ALL sensors) that triggers the DATA-LOSS banner
     MARKER_STALE_SEC = 1.5             # per-sensor: hide a quiet sensor's markers after this gap
     RANGE_MAX_M      = 8.0             # max settable distance limit (metres); slider full-scale
@@ -54,7 +54,10 @@ class RadarGUI:
 
     # ────────────────────────────────────────────────── INIT
     def __init__(self, cfg: dict) -> None:
-        self.cfg = cfg
+        # Engine first: cfg, sensors, store, tracker, readers dict, per-sensor live state, smoothing,
+        # stats, lock, watchdog flags. Readers are NOT started here (we start them at the end of
+        # __init__, once the render state is ready).
+        super().__init__(cfg)
 
         # ―― Pygame window
         self.screen = pygame.display.set_mode((1100, 750), pygame.RESIZABLE)
@@ -81,9 +84,8 @@ class RadarGUI:
         # ―― Sensors (multi-sensor data model). The GUI keeps an editing MIRROR of the primary
         #    sensor (sensor_mm / sensor_hd / input_mode / serial_*) so the existing single-
         #    sensor wizard, CONFIG dialog and render path keep working unchanged in this phase.
-        #    Phase 3 replaces those mirrors with a full per-sensor editor.
-        self.sensors: List[Sensor] = [Sensor.from_dict(s) for s in cfg["sensors"]]
-        self.sensors_by_id: Dict[str, Sensor] = {s.id: s for s in self.sensors}
+        #    Phase 3 replaces those mirrors with a full per-sensor editor. (self.sensors /
+        #    self.sensors_by_id are owned by the engine, set in super().__init__.)
         # The CONFIG dialog + wizard edit the SELECTED sensor; the mirrors below reflect it.
         self.selected_idx = 0
         self.editing_label = False        # True while inline-renaming the selected sensor
@@ -98,22 +100,12 @@ class RadarGUI:
         self.trail_on   = bool(cfg.get("trail_on", True))
         self.debug_on   = bool(cfg.get("debug", False))
 
-        # ―― Per-sensor diagnostic stats: rx count, recent frame timestamps (for Hz), the last
-        #    raw hex, and the last arrival time (for per-sensor staleness). Keyed by sensor id.
-        self.stats_by_sid = {
-            s.id: {"count": 0, "times": collections.deque(maxlen=30),
-                   "last_hex": "", "t_last": 0.0}
-            for s in self.sensors
-        }
+        # ―― Per-sensor diagnostic stats + smoothing params (smoothing_on / smooth_level /
+        #    stats_by_sid / motion_hist) are owned by the engine (super().__init__).
 
-        # ―― Smoothing
-        self.smoothing_on = bool(cfg.get("smoothing_on", True))
-        self.smooth_level = int(cfg.get("smooth_level", 0))   # 0–9
-
-        # ―― Trails & motion history
+        # ―― Trails (render-side, px coords) — motion_hist (smoothing) lives in the engine.
         self.trail_duration = float(cfg.get("trail_duration", 5.0))
         self.trails:  dict[str, collections.deque] = {}       # ser → deque[(px,py,t,col)]
-        self.motion_hist: dict[str, collections.deque] = {}   # ser → deque[(x,y,v)]
         self.pulse_phase: dict[str, float] = {}
 
         # ―― Interaction & wizard
@@ -131,34 +123,13 @@ class RadarGUI:
         self.serial_port = primary.serial_port
         self.serial_baud = int(primary.serial_baud)
 
-        # ―― Concurrency + per-sensor live state. One reader per sensor delivers frames on its
-        #    own thread; _lock guards the tracker + per-sensor latest during update().
-        self._lock = threading.Lock()
-        self.latest_by_sensor: Dict[str, List[Tuple[int,int,int]]] = {
-            s.id: [] for s in self.sensors
-        }
-        self.readers: Dict[str, object] = {}
+        # ―― Concurrency, per-sensor live state, persistence (SQLite) + tracker, and watchdog
+        #    flags are all owned by the engine (super().__init__). Readers are started at the END
+        #    of __init__ (self._open_inputs(), below), once the render state is ready.
 
-        # ―― Persistence (SQLite) + sensor-aware tracker. Sensors are upserted FIRST so the
-        #    tracks.sensor_id foreign key is valid before any reader opens a track.
-        self.store = TrackStore(C.ROOT / "pondeyes.db")
-        for s in self.sensors:
-            self.store.upsert_sensor(s.to_dict())
-        self.tracker = Tracker(self.store)
-
-        self.latest: List[Tuple[int,int,int]] = []   # primary sensor's targets (render path)
-        self.fastest = 0.0
-        # Watchdog state must exist BEFORE readers start: a reader thread can call _on_frame
-        # immediately, and _on_frame now reads t_last_frame (the later init block re-sets these).
-        self.t_last_frame = time.monotonic()
-        self.data_lost = False
-        self._open_inputs()
-
-        # ―― Timers & watchdog
+        # ―― Timers & watchdog (render-side)
         self.flash=True; self.t_flash=time.monotonic()
         self._last_beep = 0.0
-        self.t_last_frame = time.monotonic()
-        self.data_lost = False
 
         # ―― CONFIG dialog
         self.show_cfg=False
@@ -198,6 +169,7 @@ class RadarGUI:
         self.field_rects: Dict[int, pygame.Rect] = {}   # editable-field hit areas (click to focus)
 
         self.refresh_map()
+        self._open_inputs()        # start the per-sensor readers now that all state is ready
 
 
     # ───────────────────────────────────────── launch playback viewer
@@ -215,41 +187,7 @@ class RadarGUI:
 
 
 
-    # ───────────────────────────────────────── helpers – open / close data sources
-    def _open_inputs(self):
-        # Spawn one reader per enabled sensor. Each reader's callback is wrapped in a closure
-        # that tags frames with that sensor's id, so _on_frame knows which sensor they're from.
-        self._close_inputs()
-        self.cfg_error = ""
-        for s in self.sensors:
-            if not s.enabled:
-                continue
-            cb = (lambda lst, t, sid=s.id: self._on_frame(sid, lst, t))   # tag frames with sensor id + capture time
-            try:
-                r = make_reader(s, cb)
-                r.start()
-            except OSError as exc:
-                # e.g. MQTT broker unreachable — leave this sensor without a reader; the GUI
-                # surfaces the gap via its data-loss watchdog.
-                self.cfg_error = f"{s.id}: {exc}"
-                log.warning("reader open FAILED for %s (%s): %s", s.id, s.input_mode, exc)
-                continue
-            self.readers[s.id] = r
-            log.info("reader open: %s (%s)", s.id, s.input_mode)
-        log.info("inputs open: %d reader(s) live", len(self.readers))
-
-    def _close_inputs(self):
-        # Stop and forget every reader (used on shutdown, before playback, and on re-config).
-        for r in self.readers.values():
-            try:
-                r.stop()
-            except Exception:
-                pass
-        self.readers.clear()
-        # Backstop: also stop ANY reader the dict may have missed. macOS broadcasts serial input
-        # to every open handle, so a single surviving reader thread would double-count frames
-        # (inflated Hz + duplicate tracker/SQLite work). This guarantees a truly clean slate.
-        stop_all_readers()
+    # _open_inputs / _close_inputs are inherited from RadarEngine.
 
     # ───────────────────────────────────────── sensor list management (CONFIG dialog)
     @property
@@ -383,8 +321,7 @@ class RadarGUI:
         self.cur_field = self.visible_idx[self.cur_vis]
 
     # ───────────────────────────────────────── smoothing window (3→50)
-    def _win(self) -> int:
-        return 1 if not self.smoothing_on else 3 + round(self.smooth_level * 47 / 9)
+    # _win is inherited from RadarEngine.
 
     # ───────────────────────────────────────── sync runtime→cfg
     def _auto_baud(self):
@@ -431,83 +368,15 @@ class RadarGUI:
                         smoothing_on=self.smoothing_on, smooth_level=self.smooth_level,
                         debug=self.debug_on)
 
-    # ───────────────────────────────────────── frame callback (per sensor)
-    def _on_frame(self, sensor_id, lst, t_mono):
-        # Called on a reader thread for `sensor_id`. `lst` is a list of (slot, x, y, raw_hex)
-        # tuples; `t_mono` is the reader's monotonic capture time (frame arrival). Using it
-        # everywhere — instead of a clock read AFTER the lock — keeps the recorded timing accurate.
-        # The lock makes the tracker + per-sensor latest update atomic w.r.t. the other readers.
-        sensor = self.sensors_by_id.get(sensor_id)
-        if sensor is None:
-            return                                  # sensor was removed mid-flight
-        pose = (sensor.position[0], sensor.position[1], sensor.heading)
-        now = t_mono                                # frame arrival time (not "now, post-lock")
-        # Gap since the last frame from ANY sensor; if we were in data-loss, this frame recovers it.
-        gap = now - self.t_last_frame
-        was_lost = self.data_lost
-        # Snapshot the sensor's config so the recorded track replays as-recorded (faithful playback).
-        snap = {"color": sensor.color, "min_range_mm": sensor.min_range_mm,
-                "max_range_mm": sensor.max_range_mm, "trail_on": sensor.trail_on,
-                "speed_sensitivity": sensor.speed_sensitivity}
-        with self._lock:
-            # Time the tracker update (which persists to SQLite). If disk I/O stalls here it
-            # delays the reader thread and can trip the data-loss watchdog — so we log slow ones.
-            t0 = time.monotonic()
-            split = split_speed_for(sensor.speed_sensitivity)   # per-sensor teleport gate
-            self.fastest = self.tracker.update(sensor_id, pose, lst, split,
-                                               frame_mono=t_mono, sensor_snapshot=snap)
-            dur = time.monotonic() - t0
-            if dur > 0.10:
-                log.warning("slow frame handling for %s: %.0f ms (tracker.update/store write)",
-                            sensor_id, dur * 1000)
-            # Exclude slots the tracker is holding PENDING a split-confirmation, so a teleporting
-            # target isn't drawn at the jumped position for the one confirmation frame.
-            self.latest_by_sensor[sensor_id] = [
-                t[:3] for t in lst if (sensor_id, t[0]) not in self.tracker.pending]
-            # Render path mirrors the primary sensor's targets into self.latest.
-            self.latest = self.latest_by_sensor.get(self.sensors[0].id, []) if self.sensors else []
-            self.t_last_frame = now                 # global watchdog (any sensor = "we have data")
-            self.data_lost = False                  # banner off
-            # per-sensor diagnostic stats (EVERY frame — drives the debug Hz line)
-            st = self.stats_by_sid.get(sensor_id)
-            if st is not None:
-                st["count"] += 1
-                st["times"].append(now)
-                st["t_last"] = now
-                if lst and len(lst[0]) >= 4:
-                    st["last_hex"] = lst[0][3]
-        if was_lost:
-            log.info("data stream RECOVERED on %s after %.2fs", sensor_id, gap)
+    # _on_frame and _snapshot_for_render are inherited from RadarEngine.
 
     # ───────────────────────────────────────── helper – close all live tracks
     def _end_all_targets(self):
-        # Close every active track (the data stream dropped). The tracker finalises each track
-        # in the DB and moves it to `recent`; we just clear the GUI-side per-track visuals.
-        with self._lock:
-            sers = list(self.tracker.active)
-            self.tracker.end_all()
-        for ser in sers:
-            self.trails.pop(ser, None)
-            self.motion_hist.pop(ser, None)
-            self.pulse_phase.pop(ser, None)
-        self.latest = []
-        self.latest_by_sensor = {sid: [] for sid in self.latest_by_sensor}
-
-    # ───────────────────────────────────────── render snapshot (lock-safe copy)
-    def _snapshot_for_render(self):
-        # Copy the shared live state under the lock, then release it before any drawing. The
-        # render loop must never iterate the tracker's dicts directly while reader threads may
-        # be mutating them (that risks "dict changed size during iteration"). The critical
-        # section is O(sensors + tracks) -> microseconds.
-        with self._lock:
-            latest = {sid: list(v) for sid, v in self.latest_by_sensor.items()}
-            slot2ser = dict(self.tracker.slot2ser)
-            active = {ser: {"hist": info["hist"], "first": info["first"]}
-                      for ser, info in self.tracker.active.items()}
-            recent = list(self.tracker.recent)
-            stats = {sid: (st["count"], st["t_last"], list(st["times"]), st["last_hex"])
-                     for sid, st in self.stats_by_sid.items()}
-        return dict(latest=latest, slot2ser=slot2ser, active=active, recent=recent, stats=stats)
+        # Engine closes the tracks (DB) + clears engine-side state; here we also clear the
+        # render-side per-target visuals (trails / pulse phases).
+        self.end_all_targets()
+        self.trails.clear()
+        self.pulse_phase.clear()
 
     # ───────────────────────────────────────── geometry helpers
     def mm_to_px(self, mx, my):
@@ -519,15 +388,7 @@ class RadarGUI:
         return geometry.local_to_world(xl, yl, (self.sensor_mm[0], self.sensor_mm[1], self.sensor_hd))
 
     # ── distance-gate helpers ────────────────────────────────────────────────────────────
-    def _in_range(self, sensor, x_local, y_local):
-        # Display filter: True if a sensor-local target (mm) is within the sensor's gate, i.e.
-        # min_range <= range <= max_range. A 0 on either side disables that side.
-        r = math.hypot(x_local, y_local)
-        if sensor.max_range_mm > 0 and r > sensor.max_range_mm:
-            return False
-        if sensor.min_range_mm > 0 and r < sensor.min_range_mm:
-            return False
-        return True
+    # _in_range is inherited from RadarEngine.
 
     def _range_m(self, field_idx):
         # Parse a range edit field (metres) -> clamped float metres.
@@ -1121,16 +982,7 @@ class RadarGUI:
             self.banner_until = time.monotonic() + 5.0
 
     # ───────────────────────────────────────── avg motion helper
-    def _avg_motion(self,ser,x,y,v):
-        win=self._win()
-        hist=self.motion_hist.setdefault(ser,collections.deque(maxlen=win))
-        if hist.maxlen!=win:
-            hist=collections.deque(hist,maxlen=win); self.motion_hist[ser]=hist
-        hist.append((x,y,v))
-        ax=sum(h[0] for h in hist)/len(hist)
-        ay=sum(h[1] for h in hist)/len(hist)
-        av=sum(h[2] for h in hist)/len(hist)
-        return ax,ay,av
+    # _avg_motion is inherited from RadarEngine.
 
     # ───────────────────────────────────────── per-sensor marker staleness (ghost fix)
     def _cull_stale_markers(self, now_m=None):

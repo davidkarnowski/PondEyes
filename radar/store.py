@@ -97,6 +97,8 @@ class TrackStore:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self._lock = threading.Lock()
+        self._closed = False        # set under the lock in close() so a late reader-thread write
+                                    # can't touch (and C-level crash) a freed sqlite connection
         self._migrate()
 
     # ── schema migration framework ───────────────────────────────────────────────────────
@@ -134,6 +136,8 @@ class TrackStore:
             "heading": sensor.get("heading", 0.0),
         }
         with self._lock:
+            if self._closed:
+                return
             self.conn.execute(
                 """
                 INSERT INTO sensors(id, label, color, enabled, input_mode, serial_port,
@@ -162,6 +166,8 @@ class TrackStore:
         # falls back to defaults (keeps older callers/tests working).
         snap = snapshot or {}
         with self._lock:
+            if self._closed:
+                return None
             cur = self.conn.execute(
                 """
                 INSERT INTO tracks(serial, sensor_id, first_seen, last_seen,
@@ -187,6 +193,8 @@ class TrackStore:
         # the bbox incrementally gives cheap "tracks in a region" queries without scanning every
         # point. COALESCE handles the first point (NULL bounds).
         with self._lock:
+            if self._closed:
+                return                       # store is shutting down; drop this late frame
             self.conn.execute(
                 "INSERT INTO track_points(track_id, t_iso, x_mm, y_mm, range_mm, speed_mm_s, "
                 "accel_mm_s2, raw_hex, t_rel_s) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -205,6 +213,8 @@ class TrackStore:
 
     def close_track(self, track_id: int, last_seen: str, duration_sec: float):
         with self._lock:
+            if self._closed:
+                return
             self.conn.execute(
                 "UPDATE tracks SET last_seen=?, duration_sec=? WHERE id=?",
                 (last_seen, duration_sec, track_id),
@@ -254,4 +264,11 @@ class TrackStore:
         return (row[0] if row and row[0] else "#00ff80")
 
     def close(self):
-        self.conn.close()
+        # Take the write lock so we wait for any in-flight append/open/close to finish before
+        # freeing the connection — otherwise closing mid-write (the store is shared across reader
+        # threads via check_same_thread=False) is a C-level use-after-free / segfault.
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.conn.close()
