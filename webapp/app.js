@@ -117,8 +117,7 @@ function updateHud(snap) {
   }).join("  ");
   document.getElementById("debug").textContent =
     `${dbg}  targets=${(snap.targets || []).length}`;
-  document.getElementById("clock").textContent =
-    state.playback ? state.pbClock || "" : new Date().toLocaleTimeString("en-GB");
+  document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-GB");
   document.getElementById("banner").hidden = !snap.data_lost || !!state.playback;
 }
 
@@ -249,18 +248,26 @@ async function openPlayback() {
   const { tracks } = await (await fetch("/api/tracks")).json();
   const list = document.getElementById("track-list"); list.innerHTML = "";
   for (const t of tracks.slice(0, 40)) {
-    const div = document.createElement("div"); div.className = "track";
+    const div = document.createElement("div"); div.className = "track"; div.dataset.id = t.id;
     div.textContent = `${t.sensor_id}/${t.serial}  ${(t.first_seen || "").slice(0, 19)}  pts=${t.point_count ?? "?"}`;
-    div.onclick = () => loadTrack(t.id);
+    div.onclick = () => loadTrack(t.id, div);
     list.appendChild(div);
   }
   document.getElementById("playback").hidden = false;
 }
-async function loadTrack(id) {
+async function loadTrack(id, div) {
   const d = await (await fetch(`/api/tracks/${id}`)).json();
   const pts = d.points.map((p) => ({ t: p.t_rel_s ?? 0, x: p.x_mm, y: p.y_mm, v: p.speed_mm_s }));
   state.playback = { track: d.track, points: pts, start: performance.now() / 1000, playing: true, idx: 0 };
-  document.getElementById("playback-controls").hidden = false;
+  // highlight the playing track (persists, like the hover style) + raise the bottom transport
+  document.querySelectorAll("#track-list .track").forEach((el) => el.classList.toggle("active", el === div));
+  document.getElementById("pb-bar").hidden = false;
+  document.getElementById("pb-play").textContent = "⏸";
+}
+function stopPlayback() {
+  state.playback = null;
+  document.getElementById("pb-bar").hidden = true;
+  document.querySelectorAll("#track-list .track").forEach((el) => el.classList.remove("active"));
 }
 function playbackSnap(now) {
   const pb = state.playback; const tr = pb.track;
@@ -271,7 +278,8 @@ function playbackSnap(now) {
   for (const p of pb.points) { if (p.t <= (pb.t || 0)) cur = p; else break; }
   document.getElementById("pb-scrub").value = dur ? (pb.t / dur) * 100 : 0;
   const wall = tr.first_seen ? new Date(new Date(tr.first_seen).getTime() + (pb.t || 0) * 1000) : null;
-  state.pbClock = (wall ? wall.toLocaleTimeString("en-GB") + "  " : "") + `(+${(pb.t || 0).toFixed(1)}s)`;
+  state.pbClock = (wall ? wall.toLocaleString("en-GB") + "   " : "") + `(+${(pb.t || 0).toFixed(1)}s)`;
+  const clk = document.getElementById("pb-clock"); if (clk) clk.textContent = state.pbClock;
   const sensor = { id: tr.sensor_id, label: tr.serial, color: tr.sensor_color || "#00ff88",
     x: tr.sensor_x, y: tr.sensor_y, heading: tr.sensor_heading,
     min_range_mm: tr.sensor_min_range_mm || 0, max_range_mm: tr.sensor_max_range_mm || 0, fov_deg: 120 };
@@ -284,7 +292,8 @@ function localToWorld(xl, yl, sx, sy, hd) {
   const th = hd * Math.PI / 180, c = Math.cos(th), s = Math.sin(th);
   return [sx + xl * c + yl * s, sy - xl * s + yl * c];
 }
-document.getElementById("playback-x").onclick = () => { state.playback = null; document.getElementById("playback").hidden = true; document.getElementById("playback-controls").hidden = true; };
+document.getElementById("playback-x").onclick = () => { stopPlayback(); document.getElementById("playback").hidden = true; };
+document.getElementById("pb-close").onclick = stopPlayback;
 document.getElementById("pb-play").onclick = (e) => { if (state.playback) { state.playback.playing = !state.playback.playing; state.playback.start = performance.now() / 1000 - (state.playback.t || 0); e.target.textContent = state.playback.playing ? "⏸" : "▶"; } };
 document.getElementById("pb-scrub").oninput = (e) => { if (state.playback) { const dur = state.playback.points.at(-1)?.t || 0; state.playback.t = (e.target.value / 100) * dur; state.playback.playing = false; state.playback.start = performance.now() / 1000 - state.playback.t; } };
 

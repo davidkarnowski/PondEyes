@@ -1,6 +1,9 @@
 /* webapp/style.css — PondEyes dark/green terminal aesthetic, mirroring the pygame look. */
 :root { --green: #00ff66; --dim: #00702d; --red: #ff3030; --bg: #000; }
 * { box-sizing: border-box; }
+/* The `hidden` attribute must always win, even over our id selectors that set display:flex
+   (#ctxmenu, #banner, #pb-bar). Without this they render at 0,0 permanently. */
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
   font-family: "SF Mono", Menlo, monospace; color: var(--green); user-select: none; }
 
@@ -59,10 +62,18 @@ aside footer button, #config-globals button { background: none; border: 1px soli
 #config-status { font-size: 12px; color: var(--red); }
 #track-list .track { border: 1px solid var(--dim); border-radius: 4px; padding: 7px 10px; margin: 6px 0;
   cursor: pointer; font-size: 13px; }
-#track-list .track:hover { background: var(--dim); }
-#playback-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-#playback-controls button { background: none; border: 1px solid var(--green); color: var(--green);
-  cursor: pointer; border-radius: 4px; width: 34px; height: 30px; }
+#track-list .track:hover,
+#track-list .track.active { background: var(--dim); }
+#track-list .track.active { border-color: var(--green); box-shadow: 0 0 6px var(--dim); }
+
+/* playback transport — a bar that slides up from the bottom of the window while replaying */
+#pb-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 18; display: flex;
+  align-items: center; gap: 14px; padding: 12px 20px; background: rgba(4,10,4,.96);
+  border-top: 2px solid var(--green); transform: translateY(0); animation: slideup .18s ease-out; }
+@keyframes slideup { from { transform: translateY(100%); } to { transform: translateY(0); } }
+#pb-bar button { background: none; border: 1px solid var(--green); color: var(--green);
+  cursor: pointer; border-radius: 4px; width: 38px; height: 32px; font-size: 16px; }
 #pb-scrub { flex: 1; accent-color: var(--green); }
+#pb-clock { font-size: 20px; font-weight: 700; letter-spacing: 1px; min-width: 260px; text-align: right; }
 .globalrow { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
 .globalrow input[type=range] { flex: 1; accent-color: var(--green); }

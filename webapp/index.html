@@ -56,16 +56,19 @@
     </footer>
   </aside>
 
-  <!-- PLAYBACK drawer: track browser + replay scrubber -->
+  <!-- PLAYBACK drawer: track browser (the transport is a separate bottom bar) -->
   <aside id="playback" hidden>
     <header>PLAYBACK <button id="playback-x" title="close">✕</button></header>
     <div id="track-list"></div>
-    <div id="playback-controls" hidden>
-      <button id="pb-play">⏸</button>
-      <input id="pb-scrub" type="range" min="0" max="100" value="0">
-      <span id="pb-clock"></span>
-    </div>
   </aside>
+
+  <!-- playback transport: pops up from the bottom of the window while a track replays -->
+  <div id="pb-bar" hidden>
+    <button id="pb-play" title="play / pause">⏸</button>
+    <input id="pb-scrub" type="range" min="0" max="100" value="0">
+    <span id="pb-clock"></span>
+    <button id="pb-close" title="stop playback">✕</button>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>
