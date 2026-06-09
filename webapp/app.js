@@ -4,7 +4,7 @@
 // sensors/targets/trails on a canvas with native pan/zoom/pinch, mirrors the pygame top-menu
 // toggles, and drives the CONFIG + PLAYBACK drawers off the REST API.
 
-import { View } from "./geometry.js";
+import { View, fovArcPts } from "./geometry.js";
 import { drawSensor, drawTarget, drawTrail, hexToRgb } from "./render.js";
 
 const canvas = document.getElementById("map");
@@ -69,7 +69,8 @@ function frame(tms) {
 
   // live-preview the sensor being edited (override applied over the server snapshot)
   const sensors = state.playback ? snap.sensors : snap.sensors.map(withOverride);
-  for (const s of sensors) drawSensor(ctx, view, s);
+  for (const s of sensors) drawSensor(ctx, view, s, { label: false });
+  drawLabels(sensors);                                    // labels last, auto-offset when close
   if (!state.playback && state.sel) {                     // grabbable heading handle + selection ring
     const s = sensors.find((x) => x.id === state.sel);
     if (s) drawEditHandles(ctx, s);
@@ -121,6 +122,21 @@ function serialSensor(snap, ser) {
   return t ? t.sensor_id : null;
 }
 
+// Sensor name labels drawn last with greedy push-down so close/overlapping sensors stay readable.
+function drawLabels(sensors) {
+  ctx.font = "13px monospace";
+  const placed = [];
+  for (const s of sensors) {
+    if (!s.label) continue;
+    const [mx, my] = view.worldToPx(s.x, s.y);
+    let lx = mx + 9, ly = my - 9; const w = ctx.measureText(s.label).width;
+    let guard = 0;
+    while (guard++ < 12 && placed.some((p) => Math.abs(p.x - lx) < Math.max(p.w, w) && Math.abs(p.y - ly) < 15)) ly += 16;
+    placed.push({ x: lx, y: ly, w });
+    ctx.fillStyle = s.color || "#00ff66"; ctx.fillText(s.label, lx, ly);
+  }
+}
+
 // ── HUD ────────────────────────────────────────────────────────────────────────────────────
 function updateHud(snap) {
   const recent = document.getElementById("recent");
@@ -162,6 +178,23 @@ function gateArcAt(cx, cy) {
   }
   return null;
 }
+function ptSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+function coneLineAt(cx, cy, tol = 6) {     // a sensor's FOV fence (cone edge) line — for stacked markers
+  for (const s of liveSensors()) {
+    const [mx, my] = markerPx(s);
+    const R = (s.max_range_mm > 0 ? s.max_range_mm : 5000) * view.ppm;
+    const edge = fovArcPts(mx, my, s.heading, R, s.fov_deg || 120, 2);      // [left, mid, right]
+    for (const end of [edge[0], edge[edge.length - 1]]) {
+      if (ptSegDist(cx, cy, mx, my, end[0], end[1]) <= tol) return s.id;
+    }
+  }
+  return null;
+}
 
 let panning = false, lastX = 0, lastY = 0;
 canvas.addEventListener("pointerdown", (e) => {
@@ -178,9 +211,25 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 canvas.addEventListener("pointermove", (e) => {
   if (state.editDrag) { applyEditDrag(e.clientX, e.clientY); return; }
-  if (panning) { view.panBy(e.clientX - lastX, e.clientY - lastY); lastX = e.clientX; lastY = e.clientY; }
+  if (panning) { view.panBy(e.clientX - lastX, e.clientY - lastY); lastX = e.clientX; lastY = e.clientY; return; }
+  updateCursor(e.clientX, e.clientY);                 // hover cursor over clickable tools
 });
 canvas.addEventListener("pointerup", () => { if (state.editDrag) commitEditDrag(); panning = false; });
+// double-click a FOV fence line (or marker) to select a sensor — reaches stacked/overlapping markers
+canvas.addEventListener("dblclick", (e) => {
+  const sid = coneLineAt(e.clientX, e.clientY) || sensorMarkerAt(e.clientX, e.clientY);
+  if (sid) state.sel = sid;
+});
+function updateCursor(cx, cy) {
+  let cur = "grab";                                   // empty map = pannable
+  if (state.sel) { const s = sensorById(state.sel); if (s) { const [hx, hy] = handlePx(s); if (Math.hypot(cx - hx, cy - hy) <= 12) cur = "move"; } }
+  if (cur === "grab") {
+    if (gateArcAt(cx, cy)) cur = "ew-resize";
+    else if (sensorMarkerAt(cx, cy)) cur = "move";
+    else if (coneLineAt(cx, cy)) cur = "pointer";
+  }
+  canvas.style.cursor = cur;
+}
 
 function applyEditDrag(cx, cy) {
   const d = state.editDrag, s = sensorById(d.id); if (!s) return;
@@ -202,11 +251,12 @@ async function commitEditDrag() {
 }
 function withOverride(s) { return state.override && state.override.id === s.id ? { ...s, ...state.override } : s; }
 function drawEditHandles(c, s) {
+  const col = s.color || "#00ff66";                                        // handle = the marker's colour
   const [mx, my] = view.worldToPx(s.x, s.y), [hx, hy] = handlePx(s);
-  c.strokeStyle = "#fff"; c.lineWidth = 1;
+  c.strokeStyle = col; c.fillStyle = col; c.lineWidth = 2;
   c.beginPath(); c.arc(mx, my, 11, 0, 2 * Math.PI); c.stroke();             // selection ring
   c.beginPath(); c.moveTo(mx, my); c.lineTo(hx, hy); c.stroke();           // heading arm
-  c.beginPath(); c.arc(hx, hy, 6, 0, 2 * Math.PI); c.fillStyle = "#fff"; c.fill();   // aim handle
+  c.beginPath(); c.arc(hx, hy, 6, 0, 2 * Math.PI); c.fill();               // grabbable aim handle
 }
 
 // ── proximity beep (Web Audio) — fastest in-range, non-silenced/ghosted target; SOUND-gated ────

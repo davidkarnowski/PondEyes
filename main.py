@@ -13,7 +13,8 @@ def main():
     ap.add_argument("--serve", action="store_true",
                     help="also host the web view on the SAME engine (e.g. a Pi running the GUI + a "
                          "browser in another room — both reflect the one backend's state)")
-    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address (default localhost-only; pass 0.0.0.0 to allow LAN clients)")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
 

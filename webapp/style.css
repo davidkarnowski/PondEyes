@@ -4,6 +4,7 @@
 /* The `hidden` attribute must always win, even over our id selectors that set display:flex
    (#ctxmenu, #banner, #pb-bar). Without this they render at 0,0 permanently. */
 [hidden] { display: none !important; }
+button, select, input[type=color], input[type=range], #track-list .track { cursor: pointer; }   /* clickable affordance */
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
   font-family: "SF Mono", Menlo, monospace; color: var(--green); user-select: none; }
 
