@@ -93,6 +93,11 @@ def create_app(engine: RadarEngine) -> FastAPI:
         found = engine.autobaud(sensor_id, port=body.get("port"))   # synchronous probe (a few seconds)
         return {"ok": bool(found), "baud": found, "cfg_error": engine.cfg_error}
 
+    @app.post("/api/targets/{serial}")
+    def target_flag(serial: str, body: dict = Body(default={})):
+        # Ghost/silence a target on the BACKEND so both UIs share the state. {ghost?: bool, silence?: bool}
+        return engine.set_target_flag(serial, ghost=body.get("ghost"), silence=body.get("silence"))
+
     # ── map ────────────────────────────────────────────────────────────────────────────────
     @app.get("/api/map.svg")
     def map_svg():

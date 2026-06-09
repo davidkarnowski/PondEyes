@@ -81,6 +81,24 @@ def test_data_loss_watchdog_flips_and_recovers(tmp_path, monkeypatch):
         eng.shutdown()
 
 
+def test_target_ghost_silence_flags_shared_in_snapshot(tmp_path, monkeypatch):
+    import time
+    eng = _engine(tmp_path, monkeypatch, [
+        {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
+         "position": [0, 0], "heading": 0.0, "max_range_mm": 8000.0}])
+    try:
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())
+        ser = eng.world_snapshot()["targets"][0]["serial"]
+        eng.set_target_flag(ser, ghost=True)                       # backend flag -> visible to any UI
+        t = eng.world_snapshot()["targets"][0]
+        assert t["ghost"] is True and t["silence"] is False
+        eng.set_target_flag(ser, ghost=False, silence=True)
+        t = eng.world_snapshot()["targets"][0]
+        assert t["ghost"] is False and t["silence"] is True
+    finally:
+        eng.shutdown()
+
+
 def test_config_persists_to_disk_on_change(tmp_path, monkeypatch):
     import json
     from radar import constants as C

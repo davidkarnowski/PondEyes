@@ -86,9 +86,11 @@ function frame(tms) {
   }
   const sensorColor = Object.fromEntries(snap.sensors.map((s) => [s.id, hexToRgb(s.color)]));
   const sensorTrail = Object.fromEntries(snap.sensors.map((s) => [s.id, s.trail_on !== false]));
+  const ghostedNow = new Set(snap.targets.filter((t) => t.ghost).map((t) => t.serial));
   if (state.globals.trail_on !== false) {            // master trail toggle AND per-sensor trail_on
     for (const [ser, hist] of state.trails) {
       if (!liveSerials.has(ser)) continue;
+      if (ghostedNow.has(ser)) continue;             // ghosted (false reading) -> no trail
       const sid = serialSensor(snap, ser);
       if (sensorTrail[sid] === false) continue;
       const rgb = sensorColor[sid] || [0, 255, 102];
@@ -104,7 +106,7 @@ function frame(tms) {
     const [px, py] = view.worldToPx(t.x, t.y);
     drawTarget(ctx, px, py, rgb, {
       pulse: ph, speedNorm: Math.min(1, (t.v || 0) / 4000),
-      label: t.serial, ghost: state.ghost.has(t.serial),
+      label: t.serial, ghost: !!t.ghost,             // ghost/silence are backend-shared snapshot flags
     });
   }
   if (state.night) { ctx.fillStyle = "rgba(255,0,0,0.30)"; ctx.fillRect(0, 0, innerWidth, innerHeight); }
@@ -209,21 +211,28 @@ function drawEditHandles(c, s) {
 
 // ── proximity beep (Web Audio) — fastest in-range, non-silenced/ghosted target; SOUND-gated ────
 let audioCtx = null, lastBeep = 0;
+function ensureAudio() {
+  // Browsers block audio until a user gesture; create + resume the context on any interaction.
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) { /* no audio available */ }
+}
+addEventListener("pointerdown", ensureAudio);   // unlock audio on the first click/touch anywhere
 function beep(snap, now) {
-  if (!state.globals.sound) return;
-  const audible = snap.targets.filter((t) => !state.silence.has(t.serial) && !state.ghost.has(t.serial));
+  if (!state.globals.sound || !audioCtx || audioCtx.state !== "running") return;
+  const audible = snap.targets.filter((t) => !t.silence && !t.ghost);   // backend-shared flags
   if (!audible.length) return;
   const fastest = audible.reduce((m, t) => Math.max(m, t.v || 0), 0);
   const n = Math.min(1, fastest / 4000);
   if (now - lastBeep < 0.6 - n * 0.45) return;
   lastBeep = now;
   try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
-    osc.frequency.value = 700 + 700 * n; g.gain.value = 0.05;
+    osc.frequency.value = 700 + 700 * n; g.gain.value = 0.06;
     osc.connect(g); g.connect(audioCtx.destination);
     osc.start(); osc.stop(audioCtx.currentTime + 0.05);
-  } catch (e) { /* autoplay policy: works after the first user gesture */ }
+  } catch (e) { /* ignore */ }
 }
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
@@ -241,20 +250,23 @@ document.getElementById("resetview").onclick = () => { view.reset(); syncZoomLab
 function syncZoomLabel() { document.getElementById("zoomlabel").textContent = view.zoom.toFixed(1) + "x"; zoom.value = view.zoom; }
 
 // ── target right-click context menu (Silence / Ghost) ──────────────────────────────────────────
+function targetFlags(ser) { return state.snap.targets.find((t) => t.serial === ser) || { ghost: false, silence: false }; }
 canvas.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   const ser = targetAt(e.clientX, e.clientY);
   const m = document.getElementById("ctxmenu");
   if (!ser) { m.hidden = true; return; }
+  const f = targetFlags(ser);
   m.dataset.serial = ser; m.style.left = e.clientX + "px"; m.style.top = e.clientY + "px"; m.hidden = false;
-  m.querySelector('[data-ctx="silence"]').textContent = state.silence.has(ser) ? "Unsilence" : "Silence";
-  m.querySelector('[data-ctx="ghost"]').textContent = state.ghost.has(ser) ? "Unghost" : "Ghost";
+  m.querySelector('[data-ctx="silence"]').textContent = f.silence ? "Unsilence" : "Silence";
+  m.querySelector('[data-ctx="ghost"]').textContent = f.ghost ? "Unghost" : "Ghost";
 });
-document.getElementById("ctxmenu").addEventListener("click", (e) => {
+document.getElementById("ctxmenu").addEventListener("click", async (e) => {
   const m = document.getElementById("ctxmenu"); const ser = m.dataset.serial; const act = e.target.dataset.ctx;
-  if (act === "silence") toggleSet(state.silence, ser);
-  if (act === "ghost") toggleSet(state.ghost, ser);
-  m.hidden = true;
+  const f = targetFlags(ser);
+  const patch = act === "silence" ? { silence: !f.silence } : act === "ghost" ? { ghost: !f.ghost } : null;
+  m.hidden = true;                                  // ghost/silence are BACKEND state -> POST, shared with pygame
+  if (patch) await fetch(`/api/targets/${ser}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
 });
 addEventListener("click", (e) => { if (!e.target.closest("#ctxmenu")) document.getElementById("ctxmenu").hidden = true; });
 function toggleSet(set, v) { set.has(v) ? set.delete(v) : set.add(v); }

@@ -154,8 +154,7 @@ class RadarGUI(RadarEngine):
         self._click_t = 0.0
         self._min_drag_sid = None                          # marker that may start a min-gate drag
         self._min_drag_start = (0, 0)
-        self.silenced: set[str] = set()                    # target serials muted from the beep
-        self.ghosted: set[str] = set()                     # target serials flagged false (greyed + silent)
+        # self.silenced / self.ghosted are engine-owned (shared across UIs) — set in super().__init__.
         self.target_hits: list = []                        # (px, py, serial) of targets drawn this frame
         self.target_menu = None                            # open right-click menu: {serial, pos, rects}
         self.sens_rect = pygame.Rect(0, 0, 0, 0)           # speed-sensitivity slider track (CONFIG)
@@ -371,13 +370,9 @@ class RadarGUI(RadarEngine):
 
     # _on_frame and _snapshot_for_render are inherited from RadarEngine.
 
-    # ───────────────────────────────────────── helper – close all live tracks
-    def end_all_targets(self):
-        # Override: the engine closes the tracks (DB) + clears engine-side state; here we ALSO clear
-        # the render-side per-target visuals (trails / pulse phases). Called by the shared watchdog.
-        super().end_all_targets()
-        self.trails.clear()
-        self.pulse_phase.clear()
+    # end_all_targets is inherited from RadarEngine (engine-only state). The render-side trails are
+    # cleared by the run loop on the pygame thread when data_lost flips — NOT here, so the watchdog
+    # called from the web thread (under --serve) never touches pygame-owned visuals.
 
     # ───────────────────────────────────────── geometry helpers
     def mm_to_px(self, mx, my):
@@ -1417,7 +1412,10 @@ class RadarGUI(RadarEngine):
             # live in RadarEngine so the web frontend behaves identically.
             now_m = time.monotonic()
             self._cull_stale_markers(now_m)
+            was_lost = self.data_lost
             self.check_watchdog(now_m)
+            if self.data_lost and not was_lost:        # data just dropped: clear trails on THIS thread
+                self.trails.clear(); self.pulse_phase.clear()
 
             # ――― DRAWING ――――――――――――――――――――――――――――――
             self.screen.fill(C.BLACK)

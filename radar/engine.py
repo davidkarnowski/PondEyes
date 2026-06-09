@@ -78,6 +78,10 @@ class RadarEngine:
         self.readers: Dict[str, object] = {}
         self.latest: List[Tuple[int, int, int]] = []   # primary sensor's targets (pygame render path)
         self.fastest = 0.0
+        # Per-target flags live on the ENGINE (backend truth) so they're shared across UIs: a target
+        # ghosted/silenced in one view shows the same in the other.
+        self.ghosted: set = set()       # serials marked false (greyed/translucent + silent)
+        self.silenced: set = set()      # serials muted from the proximity beep
 
         # ―― Watchdog state must exist BEFORE readers start: a reader thread can call _on_frame
         #    immediately, and _on_frame reads/writes these.
@@ -190,10 +194,18 @@ class RadarEngine:
         # visuals like trails are cleared by the GUI override.)
         with self._lock:
             self.tracker.end_all()
-        for ser in list(self.motion_hist):
-            self.motion_hist.pop(ser, None)
-        self.latest = []
-        self.latest_by_sensor = {sid: [] for sid in self.latest_by_sensor}
+            self.motion_hist.clear()        # under the lock — _avg_motion also locks, so no race
+            self.latest = []
+            self.latest_by_sensor = {sid: [] for sid in self.latest_by_sensor}
+
+    def set_target_flag(self, serial: str, ghost=None, silence=None):
+        # Toggle a target's ghost/silence flag on the BACKEND so BOTH UIs share it. Pass a bool to
+        # set, None to leave unchanged. Returns the resulting flags.
+        if ghost is not None:
+            (self.ghosted.add if ghost else self.ghosted.discard)(serial)
+        if silence is not None:
+            (self.silenced.add if silence else self.silenced.discard)(serial)
+        return {"serial": serial, "ghost": serial in self.ghosted, "silence": serial in self.silenced}
 
     # ───────────────────────────────────────── data-loss watchdog + per-sensor staleness
     # Shared by EVERY frontend: the pygame run loop and the web world_snapshot() both call these,
@@ -265,12 +277,14 @@ class RadarEngine:
                 info = snap["active"].get(ser)
                 if ser is None or info is None:
                     continue
-                ax, ay, av = self._avg_motion(ser, x, y, info["hist"][2])   # smoothing (engine-owned)
-                if not self._in_range(s, ax, ay):
+                # RAW world-mm (no smoothing here): smoothing buffers are owned by the pygame render
+                # loop, and touching them from the web push thread races it (a crash under --serve).
+                if not self._in_range(s, x, y):
                     continue                          # display gate (backend still tracks/logs all)
-                wx, wy = geometry.local_to_world(ax, ay, (s.position[0], s.position[1], s.heading))
+                wx, wy = geometry.local_to_world(x, y, (s.position[0], s.position[1], s.heading))
                 targets.append({"sensor_id": s.id, "serial": ser,
-                                "x": round(wx, 1), "y": round(wy, 1), "v": round(av, 1)})
+                                "x": round(wx, 1), "y": round(wy, 1), "v": round(info["hist"][2], 1),
+                                "ghost": ser in self.ghosted, "silence": ser in self.silenced})
         recent = [{"serial": r.get("serial"), "sensor_id": r.get("sensor_id"),
                    "first": r["first"].isoformat(), "last": r["last"].isoformat(),
                    "dur": str(r["dur"]).split(".")[0]} for r in snap["recent"]]
@@ -286,15 +300,18 @@ class RadarEngine:
         return 1 if not self.smoothing_on else 3 + round(self.smooth_level * 47 / 9)
 
     def _avg_motion(self, ser, x, y, v):
-        win = self._win()
-        hist = self.motion_hist.setdefault(ser, collections.deque(maxlen=win))
-        if hist.maxlen != win:
-            hist = collections.deque(hist, maxlen=win); self.motion_hist[ser] = hist
-        hist.append((x, y, v))
-        ax = sum(h[0] for h in hist) / len(hist)
-        ay = sum(h[1] for h in hist) / len(hist)
-        av = sum(h[2] for h in hist) / len(hist)
-        return ax, ay, av
+        # Lock-guarded: the pygame render loop calls this while reader threads (and, under --serve,
+        # the web push thread via end_all_targets) may touch motion_hist — without the lock the
+        # deque could be mutated mid-iteration (a crash).
+        with self._lock:
+            win = self._win()
+            hist = self.motion_hist.setdefault(ser, collections.deque(maxlen=win))
+            if hist.maxlen != win:
+                hist = collections.deque(hist, maxlen=win); self.motion_hist[ser] = hist
+            hist.append((x, y, v))
+            return (sum(h[0] for h in hist) / len(hist),
+                    sum(h[1] for h in hist) / len(hist),
+                    sum(h[2] for h in hist) / len(hist))
 
     def _in_range(self, sensor, x_local, y_local):
         # Display filter: True if a sensor-local target (mm) is within the sensor's gate, i.e.
