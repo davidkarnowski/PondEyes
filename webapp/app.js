@@ -26,7 +26,8 @@ const state = {
   sel: null,             // selected sensor id (shows the heading handle; enables drag-edit)
   editDrag: null,        // {id, type:'move'|'aim'|'min'|'max'} during a sensor edit drag
   override: null,        // {id, ...fields} live-preview override applied over the WS snapshot
-  ctxSerial: null,       // serial the right-click menu is anchored to (so it floats with the target)
+  ctxSerial: null,       // serial the right-click menu acts on (Silence/Ghost)
+  ctxWorld: null,        // [mx,my] world point the menu is LOCKED to — floats with the map, not the target
 };
 
 // ── sizing ────────────────────────────────────────────────────────────────────────────────
@@ -319,17 +320,17 @@ canvas.addEventListener("contextmenu", (e) => {
   if (!ser) { m.hidden = true; return; }
   const f = targetFlags(ser);
   m.dataset.serial = ser; state.ctxSerial = ser; m.hidden = false;
+  state.ctxWorld = view.pxToWorld(e.clientX, e.clientY);   // lock to the MAP point under the click
   m.querySelector('[data-ctx="silence"]').textContent = f.silence ? "Unsilence" : "Silence";
   m.querySelector('[data-ctx="ghost"]').textContent = f.ghost ? "Unghost" : "Ghost";
-  positionCtxMenu();                                  // place it (anchored to the target, clamped)
+  positionCtxMenu();                                  // place it (anchored to the map point, clamped)
 });
-// Keep the menu glued to its target + on-screen as the map pans/zooms or the target moves.
+// Keep the menu locked to the MAP point it opened on (so it moves with pan/zoom, NOT the target),
+// and clamped on-screen.
 function positionCtxMenu() {
   const m = document.getElementById("ctxmenu");
-  if (m.hidden || !state.ctxSerial) return;
-  const t = state.snap.targets.find((x) => x.serial === state.ctxSerial);
-  if (!t) return;                                     // target gone this frame: hold last position
-  const [px, py] = view.worldToPx(t.x, t.y);
+  if (m.hidden || !state.ctxWorld) return;
+  const [px, py] = view.worldToPx(state.ctxWorld[0], state.ctxWorld[1]);
   const r = m.getBoundingClientRect();
   const x = Math.max(4, Math.min(innerWidth - r.width - 4, px + 12));
   const y = Math.max(4, Math.min(innerHeight - r.height - 4, py + 12));
@@ -339,10 +340,10 @@ document.getElementById("ctxmenu").addEventListener("click", async (e) => {
   const m = document.getElementById("ctxmenu"); const ser = m.dataset.serial; const act = e.target.dataset.ctx;
   const f = targetFlags(ser);
   const patch = act === "silence" ? { silence: !f.silence } : act === "ghost" ? { ghost: !f.ghost } : null;
-  m.hidden = true; state.ctxSerial = null;          // ghost/silence are BACKEND state -> POST, shared with pygame
+  m.hidden = true; state.ctxSerial = null; state.ctxWorld = null;   // ghost/silence are BACKEND state -> POST
   if (patch) await fetch(`/api/targets/${ser}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
 });
-addEventListener("click", (e) => { if (!e.target.closest("#ctxmenu")) { document.getElementById("ctxmenu").hidden = true; state.ctxSerial = null; } });
+addEventListener("click", (e) => { if (!e.target.closest("#ctxmenu")) { document.getElementById("ctxmenu").hidden = true; state.ctxSerial = null; state.ctxWorld = null; } });
 function toggleSet(set, v) { set.has(v) ? set.delete(v) : set.add(v); }
 function targetAt(cx, cy) {
   let best = null, bd = 18;
