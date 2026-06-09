@@ -110,6 +110,8 @@ class RadarGUI(RadarEngine):
         self.sensor_stage = None          # None | 'intro' | 'placing' | 'heading'
         self.placing_sensor = self.rotating_sensor = False
         self.drag_slider = self.drag_level = False
+        self.drag_heading = False                      # dragging the grabbable heading handle
+        self.heading_handle = (0, 0)                   # current heading-handle px (set during draw)
         self.knob_rect = self.level_rect = pygame.Rect(0,0,0,0)
         self.heading_btn_rect = pygame.Rect(0,0,0,0)
         self.setpos_btn_rect = pygame.Rect(0,0,0,0)   # "SET POSITION" in the heading sub-modal
@@ -1346,6 +1348,10 @@ class RadarGUI(RadarEngine):
                         self.sensor_stage="heading"; pygame.mouse.set_cursor(*pygame.cursors.arrow)
                         continue
 
+                    # grabbable heading handle (the dot at the end of the heading arm on the map)
+                    if (self.sensor_stage=="heading" and
+                            math.hypot(e.pos[0]-self.heading_handle[0], e.pos[1]-self.heading_handle[1]) <= 12):
+                        self.drag_heading=True; continue
                     # heading knob drag
                     if self.sensor_stage=="heading" and self.knob_rect.collidepoint(e.pos):
                         self.drag_slider=True; continue
@@ -1364,6 +1370,7 @@ class RadarGUI(RadarEngine):
 
                 elif e.type==pygame.MOUSEBUTTONUP and e.button==1:
                     self.drag_slider=False
+                    self.drag_heading=False
                     self.drag_range_field=None
                     self._min_drag_sid=None
                     self.drag_zoom=False
@@ -1377,6 +1384,11 @@ class RadarGUI(RadarEngine):
                 elif e.type==pygame.MOUSEMOTION and self._pan_drag is not None:
                     self._pan(e.pos[0]-self._pan_drag[0], e.pos[1]-self._pan_drag[1])
                     self._pan_drag = e.pos
+
+                elif e.type==pygame.MOUSEMOTION and self.drag_heading:
+                    # aim by dragging the handle: heading = angle from the sensor marker to the cursor
+                    sx, sy = self.mm_to_px(*self.sensor_mm)
+                    self.sensor_hd = (math.degrees(math.atan2(e.pos[0]-sx, -(e.pos[1]-sy))) + 540) % 360 - 180
 
                 elif e.type==pygame.MOUSEMOTION and self.drag_slider:
                     left=(self.screen.get_width()//2)-110; right=left+220
@@ -1484,7 +1496,8 @@ class RadarGUI(RadarEngine):
                     th = math.radians(s.heading)
                     ex = int(sx + math.sin(th)*60); ey = int(sy - math.cos(th)*60)
                     pygame.draw.line(self.screen, base, (sx, sy), (ex, ey), 2)
-                    pygame.draw.circle(self.screen, base, (ex, ey), 4)
+                    pygame.draw.circle(self.screen, base, (ex, ey), 6)   # GRABBABLE heading handle
+                    self.heading_handle = (ex, ey)
                 # PER-SENSOR data-loss: a sensor that WAS streaming but has gone silent past the
                 # timeout gets a flashing red ring + "NO DATA", so unplugging ONE sensor is visible
                 # even while OTHERS keep streaming (the big banner only fires when ALL go quiet).

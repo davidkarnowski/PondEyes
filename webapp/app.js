@@ -23,6 +23,9 @@ const state = {
   night: false,
   playback: null,        // {points, t0, t, playing, color, sensor} when replaying
   lastFrame: 0,
+  sel: null,             // selected sensor id (shows the heading handle; enables drag-edit)
+  editDrag: null,        // {id, type:'move'|'aim'|'min'|'max'} during a sensor edit drag
+  override: null,        // {id, ...fields} live-preview override applied over the WS snapshot
 };
 
 // ── sizing ────────────────────────────────────────────────────────────────────────────────
@@ -64,7 +67,13 @@ function frame(tms) {
 
   const snap = state.playback ? playbackSnap(now) : state.snap;
 
-  for (const s of snap.sensors) drawSensor(ctx, view, s);
+  // live-preview the sensor being edited (override applied over the server snapshot)
+  const sensors = state.playback ? snap.sensors : snap.sensors.map(withOverride);
+  for (const s of sensors) drawSensor(ctx, view, s);
+  if (!state.playback && state.sel) {                     // grabbable heading handle + selection ring
+    const s = sensors.find((x) => x.id === state.sel);
+    if (s) drawEditHandles(ctx, s);
+  }
 
   // accumulate + draw trails (world-mm history -> px so they pan/zoom correctly)
   const liveSerials = new Set();
@@ -100,6 +109,7 @@ function frame(tms) {
   }
   if (state.night) { ctx.fillStyle = "rgba(255,0,0,0.30)"; ctx.fillRect(0, 0, innerWidth, innerHeight); }
 
+  if (!state.playback) beep(snap, now);
   updateHud(snap);
   requestAnimationFrame(frame);
 }
@@ -124,14 +134,97 @@ function updateHud(snap) {
   document.getElementById("banner").hidden = !snap.data_lost || !!state.playback;
 }
 
-// ── gestures: pan (drag / two-finger scroll), zoom (wheel+ctrl / pinch / slider) ───────────────
-let dragging = false, lastX = 0, lastY = 0;
-canvas.addEventListener("pointerdown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener("pointermove", (e) => {
-  if (!dragging) return;
-  view.panBy(e.clientX - lastX, e.clientY - lastY); lastX = e.clientX; lastY = e.clientY;
+// ── sensor edit on the map (click marker to select; drag marker=move, handle=aim, arc=gate) ────
+const HANDLE_PX = 52;
+function liveSensors() { return state.playback ? [] : state.snap.sensors; }
+function markerPx(s) { return view.worldToPx(s.x, s.y); }
+function handlePx(s) {
+  const [mx, my] = markerPx(s); const th = s.heading * Math.PI / 180;
+  return [mx + Math.sin(th) * HANDLE_PX, my - Math.cos(th) * HANDLE_PX];
+}
+function sensorById(id) { return liveSensors().find((s) => s.id === id); }
+function sensorMarkerAt(cx, cy) {
+  for (const s of liveSensors()) { const [mx, my] = markerPx(s); if (Math.hypot(cx - mx, cy - my) <= 10) return s.id; }
+  return null;
+}
+function gateArcAt(cx, cy) {
+  for (const s of liveSensors()) {
+    const [mx, my] = markerPx(s); const d = Math.hypot(cx - mx, cy - my);
+    const ang = Math.atan2(cx - mx, -(cy - my)) * 180 / Math.PI;            // 0 = up (heading frame)
+    const da = Math.abs(((ang - s.heading + 540) % 360) - 180);            // 0..180 from heading
+    if (da > (s.fov_deg || 120) / 2 + 6) continue;
+    for (const which of ["max", "min"]) {
+      const r = which === "max" ? s.max_range_mm : s.min_range_mm;
+      if (r > 0 && Math.abs(d - r * view.ppm) <= 8) return { id: s.id, type: which };
+    }
+  }
+  return null;
+}
+
+let panning = false, lastX = 0, lastY = 0;
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  if (state.sel) {                                  // 1) heading handle of the selected sensor -> aim
+    const s = sensorById(state.sel);
+    if (s) { const [hx, hy] = handlePx(s); if (Math.hypot(e.clientX - hx, e.clientY - hy) <= 12) { state.editDrag = { id: s.id, type: "aim" }; return; } }
+  }
+  const arc = gateArcAt(e.clientX, e.clientY);       // 2) gate arc -> resize (also selects)
+  if (arc) { state.sel = arc.id; state.editDrag = arc; return; }
+  const sid = sensorMarkerAt(e.clientX, e.clientY);  // 3) marker -> select + allow move-drag
+  if (sid) { state.sel = sid; state.editDrag = { id: sid, type: "move", moved: false }; return; }
+  state.sel = null; panning = true; lastX = e.clientX; lastY = e.clientY;   // 4) empty -> deselect + pan
 });
-canvas.addEventListener("pointerup", () => { dragging = false; });
+canvas.addEventListener("pointermove", (e) => {
+  if (state.editDrag) { applyEditDrag(e.clientX, e.clientY); return; }
+  if (panning) { view.panBy(e.clientX - lastX, e.clientY - lastY); lastX = e.clientX; lastY = e.clientY; }
+});
+canvas.addEventListener("pointerup", () => { if (state.editDrag) commitEditDrag(); panning = false; });
+
+function applyEditDrag(cx, cy) {
+  const d = state.editDrag, s = sensorById(d.id); if (!s) return;
+  if (d.type === "move") { const [wx, wy] = view.pxToWorld(cx, cy); state.override = { id: d.id, x: wx, y: wy }; d.moved = true; }
+  else if (d.type === "aim") { const [mx, my] = markerPx(s); const hd = Math.atan2(cx - mx, -(cy - my)) * 180 / Math.PI; state.override = { id: d.id, heading: ((hd + 540) % 360) - 180 }; }
+  else { const [mx, my] = markerPx(s); const mm = Math.max(0, Math.hypot(cx - mx, cy - my) / view.ppm);
+         state.override = { id: d.id, [d.type === "max" ? "max_range_mm" : "min_range_mm"]: mm }; }
+}
+async function commitEditDrag() {
+  const d = state.editDrag; state.editDrag = null;
+  if (d.type === "move" && !d.moved) { state.override = null; return; }     // plain click = select only
+  const ov = state.override; if (!ov || ov.id !== d.id) { state.override = null; return; }
+  const patch = {};
+  if (d.type === "move") patch.position = [Math.round(ov.x), Math.round(ov.y)];
+  else if (d.type === "aim") patch.heading = Math.round(ov.heading * 10) / 10;
+  else { const k = d.type === "max" ? "max_range_mm" : "min_range_mm"; patch[k] = Math.round(ov[k]); }
+  await fetch(`/api/sensors/${d.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+  setTimeout(() => { if (!state.editDrag) state.override = null; }, 250);    // hold until the WS catches up
+}
+function withOverride(s) { return state.override && state.override.id === s.id ? { ...s, ...state.override } : s; }
+function drawEditHandles(c, s) {
+  const [mx, my] = view.worldToPx(s.x, s.y), [hx, hy] = handlePx(s);
+  c.strokeStyle = "#fff"; c.lineWidth = 1;
+  c.beginPath(); c.arc(mx, my, 11, 0, 2 * Math.PI); c.stroke();             // selection ring
+  c.beginPath(); c.moveTo(mx, my); c.lineTo(hx, hy); c.stroke();           // heading arm
+  c.beginPath(); c.arc(hx, hy, 6, 0, 2 * Math.PI); c.fillStyle = "#fff"; c.fill();   // aim handle
+}
+
+// ── proximity beep (Web Audio) — fastest in-range, non-silenced/ghosted target; SOUND-gated ────
+let audioCtx = null, lastBeep = 0;
+function beep(snap, now) {
+  if (!state.globals.sound) return;
+  const audible = snap.targets.filter((t) => !state.silence.has(t.serial) && !state.ghost.has(t.serial));
+  if (!audible.length) return;
+  const fastest = audible.reduce((m, t) => Math.max(m, t.v || 0), 0);
+  const n = Math.min(1, fastest / 4000);
+  if (now - lastBeep < 0.6 - n * 0.45) return;
+  lastBeep = now;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+    osc.frequency.value = 700 + 700 * n; g.gain.value = 0.05;
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.05);
+  } catch (e) { /* autoplay policy: works after the first user gesture */ }
+}
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   if (e.ctrlKey || e.metaKey) {                          // pinch-zoom (browsers send pinch as wheel+ctrl)
