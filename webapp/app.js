@@ -198,48 +198,78 @@ function refreshToggles() {
 }
 
 // ── CONFIG drawer ──────────────────────────────────────────────────────────────────────────
+function field(label, input) {
+  const row = document.createElement("div"); row.className = "row";
+  const l = document.createElement("label"); l.textContent = label; row.append(l, input); return row;
+}
+function mkInput(type, val, attrs = {}) {
+  const i = document.createElement("input"); i.type = type; i.value = val; Object.assign(i, attrs); return i;
+}
+function nextSensorId() {
+  const ids = [...document.querySelectorAll(".sensor-card")].map((c) => c.dataset.id);
+  let n = 1; while (ids.includes("S" + n)) n++; return "S" + n;
+}
+function sensorCard(s) {
+  const card = document.createElement("div"); card.className = "sensor-card"; card.dataset.id = s.id;
+  const f = {};
+  f.label = mkInput("text", s.label || s.id);
+  f.mode = document.createElement("select");
+  for (const m of ["serial", "mqtt", "sim"]) { const o = document.createElement("option"); o.value = o.textContent = m; if (m === s.input_mode) o.selected = true; f.mode.append(o); }
+  f.port = mkInput("text", s.serial_port || "");
+  f.baud = mkInput("number", s.serial_baud || 256000);
+  f.color = mkInput("color", s.color || "#00ddff");
+  f.posx = mkInput("number", s.position ? s.position[0] : 0);
+  f.posy = mkInput("number", s.position ? s.position[1] : 0);
+  f.head = mkInput("number", s.heading ?? 0);
+  f.min = mkInput("number", (s.min_range_mm || 0) / 1000, { step: 0.1 });
+  f.max = mkInput("number", (s.max_range_mm || 0) / 1000, { step: 0.1 });
+  f.sens = mkInput("range", s.speed_sensitivity ?? 0.25, { min: 0, max: 1, step: 0.01 });
+  const hd = document.createElement("div"); hd.className = "card-head";
+  const title = document.createElement("strong"); title.textContent = s.id;
+  const dup = document.createElement("button"); dup.textContent = "⊕ DUP";
+  dup.onclick = () => { const v = card._read(); const id = nextSensorId(); card.after(sensorCard({ ...v, id, label: id })); };
+  const rm = document.createElement("button"); rm.textContent = "− REMOVE"; rm.onclick = () => card.remove();
+  hd.append(title, dup, rm);
+  card.append(hd, field("Label", f.label), field("Input", f.mode), field("Serial port", f.port),
+    field("Baud", f.baud), field("Color", f.color), field("Pos X mm", f.posx), field("Pos Y mm", f.posy),
+    field("Heading °", f.head), field("Min range m", f.min), field("Max range m", f.max),
+    field("Speed sens", f.sens));
+  card._read = () => ({
+    id: card.dataset.id, label: f.label.value, input_mode: f.mode.value, serial_port: f.port.value,
+    serial_baud: +f.baud.value, color: f.color.value, position: [+f.posx.value, +f.posy.value],
+    heading: +f.head.value, min_range_mm: (+f.min.value) * 1000, max_range_mm: (+f.max.value) * 1000,
+    speed_sensitivity: +f.sens.value, sim_pattern: s.sim_pattern || "circle", sim_hz: s.sim_hz || 10,
+    broker: s.broker, port: s.port, topic: s.topic, trail_on: s.trail_on ?? true, enabled: s.enabled ?? true,
+  });
+  return card;
+}
+function globalSlider(parent, label, val, min, max, step) {
+  const row = document.createElement("div"); row.className = "globalrow";
+  const l = document.createElement("label"); l.textContent = label;
+  const out = document.createElement("span"); out.textContent = val;
+  const inp = mkInput("range", val, { min, max, step }); inp.oninput = () => (out.textContent = inp.value);
+  row.append(l, inp, out); parent.append(row); return inp;
+}
 async function openConfig() {
   const cfg = await (await fetch("/api/config")).json();
   state.globals = cfg.globals || {}; state.night = !!state.globals.night;
   state.trailDuration = +(state.globals.trail_duration ?? 5.0); refreshToggles();
   const list = document.getElementById("sensor-list"); list.innerHTML = "";
   for (const s of cfg.sensors) list.appendChild(sensorCard(s));
+  const g = document.getElementById("config-globals"); g.innerHTML = "";
+  const add = document.createElement("button"); add.textContent = "+ ADD SENSOR";
+  add.onclick = () => { const id = nextSensorId(); list.appendChild(sensorCard({ id, label: id, color: "#00ddff", input_mode: "sim", position: [2000, 2000], heading: 0, min_range_mm: 0, max_range_mm: 8000 })); };
+  g.append(add);
+  state._gSmooth = globalSlider(g, "Smoothing level", state.globals.smooth_level ?? 0, 0, 9, 1);
+  state._gTrail = globalSlider(g, "Trail seconds", state.globals.trail_duration ?? 5, 1, 20, 0.5);
   document.getElementById("config").hidden = false;
-}
-function field(label, input) {
-  const row = document.createElement("div"); row.className = "row";
-  const l = document.createElement("label"); l.textContent = label; row.append(l, input); return row;
-}
-function sensorCard(s) {
-  const card = document.createElement("div"); card.className = "sensor-card"; card.dataset.id = s.id;
-  const mk = (type, val) => { const i = document.createElement("input"); i.type = type; i.value = val; return i; };
-  const mode = document.createElement("select");
-  for (const m of ["serial", "mqtt", "sim"]) { const o = document.createElement("option"); o.value = o.textContent = m; if (m === s.input_mode) o.selected = true; mode.append(o); }
-  const head = document.createElement("strong"); head.textContent = `${s.id} — ${s.label}`;
-  card.append(head,
-    field("Input", mode),
-    field("Serial port", mk("text", s.serial_port || "")),
-    field("Baud", mk("number", s.serial_baud || 256000)),
-    field("Color", mk("color", s.color)),
-    field("Min range m", mk("number", (s.min_range_mm || 0) / 1000)),
-    field("Max range m", mk("number", (s.max_range_mm || 0) / 1000)));
-  card._read = () => ({
-    id: s.id, label: s.label, input_mode: mode.value,
-    serial_port: card.querySelectorAll("input")[0].value,
-    serial_baud: +card.querySelectorAll("input")[1].value,
-    color: card.querySelectorAll("input")[2].value,
-    min_range_mm: (+card.querySelectorAll("input")[3].value) * 1000,
-    max_range_mm: (+card.querySelectorAll("input")[4].value) * 1000,
-    position: s.position, heading: s.heading,
-    sim_pattern: s.sim_pattern, sim_hz: s.sim_hz, broker: s.broker, port: s.port, topic: s.topic,
-    speed_sensitivity: s.speed_sensitivity, trail_on: s.trail_on, enabled: s.enabled,
-  });
-  return card;
 }
 document.getElementById("config-x").onclick = () => (document.getElementById("config").hidden = true);
 document.getElementById("config-apply").onclick = async () => {
   const sensors = [...document.querySelectorAll(".sensor-card")].map((c) => c._read());
-  const r = await (await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sensors }) })).json();
+  const patch = { sensors, smooth_level: +state._gSmooth.value, trail_duration: +state._gTrail.value };
+  const r = await (await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })).json();
+  state.trailDuration = patch.trail_duration;
   document.getElementById("config-status").textContent = r.cfg_error || "applied ✓";
 };
 

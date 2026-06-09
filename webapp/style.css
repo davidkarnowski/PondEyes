@@ -51,6 +51,11 @@ aside header { display: flex; justify-content: space-between; align-items: cente
 aside header button { background: none; border: 1px solid var(--green); color: var(--green);
   cursor: pointer; border-radius: 4px; width: 28px; height: 28px; font-size: 14px; }
 .sensor-card { border: 1px solid var(--dim); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+.sensor-card .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sensor-card .card-head strong { flex: 1; }
+.sensor-card .card-head button { background: none; border: 1px solid var(--green); color: var(--green);
+  font: inherit; font-size: 11px; cursor: pointer; border-radius: 4px; padding: 2px 7px; }
+.sensor-card .row input[type=range] { flex: 1; accent-color: var(--green); }
 .sensor-card .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
 label { font-size: 13px; min-width: 92px; opacity: .85; }
 input[type=text], input[type=number], select { background: #020; border: 1px solid var(--dim);
