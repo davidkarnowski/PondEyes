@@ -76,10 +76,13 @@ function frame(tms) {
     state.trails.set(t.serial, hist);
   }
   const sensorColor = Object.fromEntries(snap.sensors.map((s) => [s.id, hexToRgb(s.color)]));
-  if (state.globals.trail_on !== false) {
+  const sensorTrail = Object.fromEntries(snap.sensors.map((s) => [s.id, s.trail_on !== false]));
+  if (state.globals.trail_on !== false) {            // master trail toggle AND per-sensor trail_on
     for (const [ser, hist] of state.trails) {
       if (!liveSerials.has(ser)) continue;
-      const rgb = sensorColor[serialSensor(snap, ser)] || [0, 255, 102];
+      const sid = serialSensor(snap, ser);
+      if (sensorTrail[sid] === false) continue;
+      const rgb = sensorColor[sid] || [0, 255, 102];
       const pts = hist.map(([mx, my, t]) => { const [px, py] = view.worldToPx(mx, my); return [px, py, t]; });
       drawTrail(ctx, pts, now, state.trailDuration, rgb);
     }
@@ -230,8 +233,20 @@ function sensorCard(s) {
   dup.onclick = () => { const v = card._read(); const id = nextSensorId(); card.after(sensorCard({ ...v, id, label: id })); };
   const rm = document.createElement("button"); rm.textContent = "− REMOVE"; rm.onclick = () => card.remove();
   hd.append(title, dup, rm);
+  // AUTO-baud button beside the Baud field — probes the (possibly edited) port server-side.
+  const auto = document.createElement("button"); auto.type = "button"; auto.textContent = "AUTO";
+  auto.onclick = async () => {
+    auto.textContent = "…";
+    const r = await (await fetch(`/api/sensors/${card.dataset.id}/autobaud`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: f.port.value }),
+    })).json();
+    if (r.baud) f.baud.value = r.baud;
+    auto.textContent = "AUTO";
+    document.getElementById("config-status").textContent = r.cfg_error || (r.baud ? `locked ${r.baud}` : "no baud found");
+  };
+  const baudRow = field("Baud", f.baud); baudRow.append(auto);
   card.append(hd, field("Label", f.label), field("Input", f.mode), field("Serial port", f.port),
-    field("Baud", f.baud), field("Color", f.color), field("Pos X mm", f.posx), field("Pos Y mm", f.posy),
+    baudRow, field("Color", f.color), field("Pos X mm", f.posx), field("Pos Y mm", f.posy),
     field("Heading °", f.head), field("Min range m", f.min), field("Max range m", f.max),
     field("Speed sens", f.sens));
   card._read = () => ({

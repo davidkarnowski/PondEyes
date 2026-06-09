@@ -70,6 +70,10 @@ export function drawSensor(ctx, view, s, { drawFill = true, drawRings = true } =
   // marker + label
   ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * Math.PI); ctx.fillStyle = css(rgb); ctx.fill();
   if (s.label) { ctx.font = "13px monospace"; ctx.fillStyle = css(rgb); ctx.fillText(s.label, sx + 9, sy - 9); }
+  if (s.stale) {                                   // this sensor went quiet while others may stream
+    ctx.beginPath(); ctx.arc(sx, sy, 12, 0, 2 * Math.PI); ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.font = "12px monospace"; ctx.fillStyle = "#ff3030"; ctx.fillText(`${s.id} NO DATA`, sx + 10, sy - 22);
+  }
   return [sx, sy];
 }
 
