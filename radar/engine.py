@@ -37,6 +37,8 @@ log = get_logger("engine")
 
 class RadarEngine:
     MAX_V, FOV_DEG = 4000, 120        # speed cap (colour/beep norm); radar field-of-view degrees
+    DATA_TIMEOUT_SEC = 1.0            # gap (ALL sensors quiet) that flags global data loss
+    MARKER_STALE_SEC = 1.5            # per-sensor: drop a quiet sensor's live markers after this gap
 
     def __init__(self, cfg: dict, store_path=None) -> None:
         # cfg is the loaded radar_config.json (schema v2). We never touch pygame here.
@@ -179,6 +181,36 @@ class RadarEngine:
         self.latest = []
         self.latest_by_sensor = {sid: [] for sid in self.latest_by_sensor}
 
+    # ───────────────────────────────────────── data-loss watchdog + per-sensor staleness
+    # Shared by EVERY frontend: the pygame run loop and the web world_snapshot() both call these,
+    # so data_lost / marker staleness behave identically regardless of how PondEyes is rendered.
+    def _cull_stale_markers(self, now=None):
+        # Hide the live markers of any sensor that has individually gone quiet longer than
+        # MARKER_STALE_SEC (independent of the others). Clears MARKERS only; the tracks expire on
+        # the Tracker's own timeout, so a brief dropout keeps continuity.
+        now = time.monotonic() if now is None else now
+        for s in self.sensors:
+            st = self.stats_by_sid.get(s.id)
+            if (st and st["count"] and self.latest_by_sensor.get(s.id)
+                    and (now - st["t_last"]) > self.MARKER_STALE_SEC):
+                with self._lock:
+                    self.latest_by_sensor[s.id] = []
+
+    def check_watchdog(self, now=None):
+        # Global DATA-LOSS: when EVERY sensor has been quiet past DATA_TIMEOUT_SEC, flip data_lost
+        # (reset to False by _on_frame on any frame) and end the live tracks. Returns data_lost.
+        now = time.monotonic() if now is None else now
+        if not self.data_lost and (now - self.t_last_frame) > self.DATA_TIMEOUT_SEC:
+            self.data_lost = True
+            ages = ", ".join(
+                (f"{s.id}={now - self.stats_by_sid[s.id]['t_last']:.2f}s"
+                 if self.stats_by_sid[s.id]['count'] else f"{s.id}=never")
+                for s in self.sensors)
+            log.warning("DATA STREAM LOST after %.2fs gap (per-sensor last-seen: %s)",
+                        now - self.t_last_frame, ages)
+            self.end_all_targets()
+        return self.data_lost
+
     # ───────────────────────────────────────── snapshots (both produced under the lock)
     def _snapshot_for_render(self):
         # Lock-safe copy of the shared live state, then released before any drawing. EXACT historical
@@ -198,6 +230,9 @@ class RadarEngine:
         # to WORLD-mm here (authoritative geometry.local_to_world), after the SAME smoothing + gate
         # filter the pygame view applies — so both frontends agree. The browser only scales world-mm
         # to pixels and pans/zooms (a cosmetic transform), never re-deriving geometry.
+        # NOTE: this is a PURE read — the caller's loop drives staleness + the watchdog
+        # (pygame run loop / web WS loop call _cull_stale_markers() + check_watchdog()); data_lost
+        # below just reflects the current flag.
         snap = self._snapshot_for_render()
         sensors = [{"id": s.id, "label": s.label, "color": s.color,
                     "x": s.position[0], "y": s.position[1], "heading": s.heading,

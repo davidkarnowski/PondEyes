@@ -11,6 +11,7 @@ import os
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -60,7 +61,8 @@ def test_update_sensor(tmp_path, monkeypatch):
 
 def test_ws_live_pushes_world_mm_targets(tmp_path, monkeypatch):
     eng = _engine(tmp_path, monkeypatch)
-    eng._on_frame("S1", [(0, 1000, 0, "")], 10.0)      # one frame -> one target
+    eng._on_frame("S1", [(0, 1000, 0, "")], time.monotonic())   # a FRESH frame (the WS loop runs
+                                                                # the data-loss watchdog each push)
     client = TestClient(create_app(eng))
     try:
         with client.websocket_connect("/ws/live") as ws:

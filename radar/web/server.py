@@ -47,8 +47,11 @@ def create_app(engine: RadarEngine) -> FastAPI:
         await ws.accept()
         try:
             while True:
-                # world_snapshot() is fast + lock-safe; serialise the LATEST state and pace at
-                # PUSH_HZ. We never queue per-frame, so a slow client can't stall the readers.
+                # Drive the shared staleness + data-loss watchdog at the push cadence (same logic
+                # the pygame run loop runs), then serialise the LATEST state. world_snapshot() is
+                # fast + lock-safe; we never queue per-frame, so a slow client can't stall readers.
+                engine._cull_stale_markers()
+                engine.check_watchdog()
                 await ws.send_text(json.dumps(engine.world_snapshot()))
                 await asyncio.sleep(1.0 / PUSH_HZ)
         except WebSocketDisconnect:

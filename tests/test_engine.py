@@ -61,6 +61,26 @@ def test_world_snapshot_applies_distance_gate(tmp_path, monkeypatch):
         eng.shutdown()
 
 
+def test_data_loss_watchdog_flips_and_recovers(tmp_path, monkeypatch):
+    import time
+    eng = _engine(tmp_path, monkeypatch, [
+        {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
+         "position": [0, 0], "heading": 0.0, "max_range_mm": 8000.0}])
+    try:
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # fresh frame
+        assert eng.check_watchdog() is False                        # not stale yet
+        assert len(eng.world_snapshot()["targets"]) == 1
+        eng.t_last_frame = time.monotonic() - 5.0                   # force an all-quiet gap
+        assert eng.check_watchdog() is True                        # flips data_lost + ends tracks
+        assert eng.data_lost is True
+        assert eng.world_snapshot()["targets"] == []
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # a fresh frame recovers
+        assert eng.data_lost is False
+        assert len(eng.world_snapshot()["targets"]) == 1
+    finally:
+        eng.shutdown()
+
+
 def test_update_sensor_persists_and_resyncs(tmp_path, monkeypatch):
     eng = _engine(tmp_path, monkeypatch, [
         {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",

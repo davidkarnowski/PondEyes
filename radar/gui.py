@@ -45,10 +45,8 @@ log = get_logger("gui")
 
 class RadarGUI(RadarEngine):
     # Inherits the headless RadarEngine (readers, tracker, store, live snapshot, smoothing, gates);
-    # this class adds ONLY the pygame window, rendering, and interaction. MAX_V / FOV_DEG come
-    # from the engine.
-    DATA_TIMEOUT_SEC = 1.0              # gap (ALL sensors) that triggers the DATA-LOSS banner
-    MARKER_STALE_SEC = 1.5             # per-sensor: hide a quiet sensor's markers after this gap
+    # this class adds ONLY the pygame window, rendering, and interaction. MAX_V / FOV_DEG /
+    # DATA_TIMEOUT_SEC / MARKER_STALE_SEC come from the engine.
     RANGE_MAX_M      = 8.0             # max settable distance limit (metres); slider full-scale
     MAX_ZOOM         = 8.0             # viewport zoom ceiling (1.0 = fit-to-window)
 
@@ -371,10 +369,10 @@ class RadarGUI(RadarEngine):
     # _on_frame and _snapshot_for_render are inherited from RadarEngine.
 
     # ───────────────────────────────────────── helper – close all live tracks
-    def _end_all_targets(self):
-        # Engine closes the tracks (DB) + clears engine-side state; here we also clear the
-        # render-side per-target visuals (trails / pulse phases).
-        self.end_all_targets()
+    def end_all_targets(self):
+        # Override: the engine closes the tracks (DB) + clears engine-side state; here we ALSO clear
+        # the render-side per-target visuals (trails / pulse phases). Called by the shared watchdog.
+        super().end_all_targets()
         self.trails.clear()
         self.pulse_phase.clear()
 
@@ -985,17 +983,7 @@ class RadarGUI(RadarEngine):
     # _avg_motion is inherited from RadarEngine.
 
     # ───────────────────────────────────────── per-sensor marker staleness (ghost fix)
-    def _cull_stale_markers(self, now_m=None):
-        # Hide the live markers of any sensor that has individually gone quiet for longer than
-        # MARKER_STALE_SEC, independent of the other sensors. Clears MARKERS only; the tracks
-        # themselves expire on the Tracker's END_TIMEOUT, so a brief dropout keeps continuity.
-        now_m = time.monotonic() if now_m is None else now_m
-        for s in self.sensors:
-            st = self.stats_by_sid.get(s.id)
-            if (st and st["count"] and self.latest_by_sensor.get(s.id)
-                    and (now_m - st["t_last"]) > self.MARKER_STALE_SEC):
-                with self._lock:
-                    self.latest_by_sensor[s.id] = []
+    # _cull_stale_markers and check_watchdog are inherited from RadarEngine.
 
     # ───────────────────────────────────────── hover cursor feedback
     def _update_hover_cursor(self, pos):
@@ -1370,26 +1358,13 @@ class RadarGUI(RadarEngine):
                 elif e.type==pygame.MOUSEMOTION and self.drag_arc is not None:
                     self._set_range_field_from_point(self.drag_arc, e.pos)
 
-            # ――― PER-SENSOR MARKER STALENESS ―――
-            # Hide a sensor's live markers if IT has gone quiet, even while OTHER sensors are
-            # still streaming. Without this, a sensor that stops (target left / out of range /
-            # USB hiccup) keeps its last targets drawn forever as "ghosts", because the GLOBAL
-            # watchdog below never trips while another sensor (e.g. a sim) keeps t_last_frame
-            # fresh. We clear MARKERS only — the underlying tracks expire on their own
-            # END_TIMEOUT, so a brief dropout that recovers keeps track continuity.
+            # ――― STALENESS + DATA-LOSS WATCHDOG (shared engine logic) ―――
+            # Per-sensor staleness hides a quiet sensor's markers even while OTHERS stream; the
+            # global watchdog flips data_lost + ends tracks only when ALL sensors are quiet. Both
+            # live in RadarEngine so the web frontend behaves identically.
             now_m = time.monotonic()
             self._cull_stale_markers(now_m)
-
-            # ――― STREAM WATCHDOG (global banner — only when ALL sensors are quiet) ―――
-            if not self.data_lost and (now_m-self.t_last_frame)>self.DATA_TIMEOUT_SEC:
-                self.data_lost=True
-                ages=", ".join(
-                    (f"{s.id}={now_m - self.stats_by_sid[s.id]['t_last']:.2f}s"
-                     if self.stats_by_sid[s.id]['count'] else f"{s.id}=never")
-                    for s in self.sensors)
-                log.warning("DATA STREAM LOST after %.2fs gap (per-sensor last-seen: %s)",
-                            now_m-self.t_last_frame, ages)
-                self._end_all_targets()
+            self.check_watchdog(now_m)
 
             # ――― DRAWING ――――――――――――――――――――――――――――――
             self.screen.fill(C.BLACK)
