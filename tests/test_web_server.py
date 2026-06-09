@@ -55,6 +55,19 @@ def test_update_sensor(tmp_path, monkeypatch):
         assert r.status_code == 200 and r.json()["sensor"]["max_range_mm"] == 1234.0
         assert eng.sensors_by_id["S1"].max_range_mm == 1234.0
         assert client.post("/api/sensors/NOPE", json={}).status_code == 404
+        assert client.post("/api/sensors/NOPE/autobaud", json={}).status_code == 404
+    finally:
+        eng.shutdown()
+
+
+def test_config_post_persists(tmp_path, monkeypatch):
+    import json
+    eng = _engine(tmp_path, monkeypatch)
+    client = TestClient(create_app(eng))
+    try:
+        client.post("/api/config", json={"smooth_level": 5})              # web write
+        saved = json.loads((tmp_path / "radar_config.json").read_text())  # backend stored it
+        assert saved.get("smooth_level") == 5
     finally:
         eng.shutdown()
 

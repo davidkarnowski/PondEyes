@@ -76,6 +76,7 @@ def create_app(engine: RadarEngine) -> FastAPI:
         # smoothing affects the engine's _avg_motion live
         engine.smoothing_on = bool(engine.cfg.get("smoothing_on", True))
         engine.smooth_level = int(engine.cfg.get("smooth_level", 0))
+        engine.save_config()        # persist: the backend stores the truth (durable across restarts)
         return {"ok": True, "cfg_error": engine.cfg_error}
 
     @app.post("/api/sensors/{sensor_id}")
@@ -84,6 +85,13 @@ def create_app(engine: RadarEngine) -> FastAPI:
         if s is None:
             raise HTTPException(404, f"no sensor {sensor_id}")
         return {"ok": True, "sensor": s.to_dict(), "cfg_error": engine.cfg_error}
+
+    @app.post("/api/sensors/{sensor_id}/autobaud")
+    def autobaud(sensor_id: str, body: dict = Body(default={})):
+        if sensor_id not in engine.sensors_by_id:
+            raise HTTPException(404, f"no sensor {sensor_id}")
+        found = engine.autobaud(sensor_id, port=body.get("port"))   # synchronous probe (a few seconds)
+        return {"ok": bool(found), "baud": found, "cfg_error": engine.cfg_error}
 
     # ── map ────────────────────────────────────────────────────────────────────────────────
     @app.get("/api/map.svg")

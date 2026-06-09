@@ -124,5 +124,8 @@ def load() -> dict:
 
 
 def save(cfg: dict) -> None:
-    # Persist whatever shape we hold in memory (always v2 once the app has run once).
-    CFG_PATH.write_text(json.dumps(cfg, indent=2))
+    # Persist whatever shape we hold in memory (always v2 once the app has run once). Resolve the
+    # path against constants.ROOT at CALL time (not the import-time CFG_PATH) so tests that redirect
+    # ROOT to a tmp dir don't clobber the real radar_config.json.
+    from radar import constants
+    (constants.ROOT / "radar_config.json").write_text(json.dumps(cfg, indent=2))

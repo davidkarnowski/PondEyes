@@ -923,6 +923,7 @@ class RadarGUI(RadarEngine):
         self._sync_cfg()
         for s in self.sensors:
             self.store.upsert_sensor(s.to_dict())
+        self.save_config()          # persist immediately (not just on exit) so the backend stores it
         self._open_inputs()
 
         old_map = self.cfg.get("map")

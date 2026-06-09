@@ -81,6 +81,31 @@ def test_data_loss_watchdog_flips_and_recovers(tmp_path, monkeypatch):
         eng.shutdown()
 
 
+def test_config_persists_to_disk_on_change(tmp_path, monkeypatch):
+    import json
+    from radar import constants as C
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    eng = RadarEngine(_cfg([
+        {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
+         "position": [0, 0], "heading": 0.0}]))
+    try:
+        eng.update_sensor("S1", {"max_range_mm": 1234.0}, restart=False)   # backend persists it
+        saved = json.loads((tmp_path / "radar_config.json").read_text())
+        assert saved["sensors"][0]["max_range_mm"] == 1234.0               # durable across a restart
+    finally:
+        eng.shutdown()
+
+
+def test_world_snapshot_has_per_sensor_stale_flag(tmp_path, monkeypatch):
+    eng = _engine(tmp_path, monkeypatch, [
+        {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
+         "position": [0, 0], "heading": 0.0}])
+    try:
+        assert "stale" in eng.world_snapshot()["sensors"][0]
+    finally:
+        eng.shutdown()
+
+
 def test_sim_mode_runs_serial_sensor_without_hardware(tmp_path, monkeypatch):
     from radar import constants as C
     monkeypatch.setattr(C, "ROOT", tmp_path)

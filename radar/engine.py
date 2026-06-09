@@ -26,6 +26,7 @@ from dataclasses import replace
 from typing import Dict, List, Tuple
 
 from radar import constants as C
+from radar import config
 from radar import geometry
 from radar.sensors import Sensor
 from radar.reader_base import make_reader, stop_all_readers
@@ -247,10 +248,15 @@ class RadarEngine:
         # (pygame run loop / web WS loop call _cull_stale_markers() + check_watchdog()); data_lost
         # below just reflects the current flag.
         snap = self._snapshot_for_render()
+        now = time.monotonic()
+        def _stale(sid):                          # was streaming, now individually quiet -> NO DATA
+            st = snap["stats"].get(sid)
+            return bool(st and st[0] and (now - st[1]) > self.DATA_TIMEOUT_SEC)
         sensors = [{"id": s.id, "label": s.label, "color": s.color,
                     "x": s.position[0], "y": s.position[1], "heading": s.heading,
                     "min_range_mm": s.min_range_mm, "max_range_mm": s.max_range_mm,
-                    "trail_on": s.trail_on, "fov_deg": self.FOV_DEG, "enabled": s.enabled}
+                    "trail_on": s.trail_on, "fov_deg": self.FOV_DEG, "enabled": s.enabled,
+                    "stale": _stale(s.id)}
                    for s in self.sensors]
         targets = []
         for s in self.sensors:
@@ -300,10 +306,18 @@ class RadarEngine:
             return False
         return True
 
+    # ───────────────────────────────────────── config persistence (backend = source of truth)
+    def save_config(self):
+        # Persist the current engine state to radar_config.json. The backend OWNS persistence, so
+        # BOTH UIs route their config writes through here — settings are stored durably (survive a
+        # restart) regardless of which UI made the change.
+        self.cfg["sensors"] = [s.to_dict() for s in self.sensors]
+        config.save(self.cfg)
+
     # ───────────────────────────────────────── config mutation (the web POST /api/config uses these)
     def update_sensor(self, sensor_id: str, updates: dict, restart: bool = True):
-        # Apply field updates to one sensor (pose, gates, transport, colour, ...), persist to the DB,
-        # and restart readers if a transport-affecting field changed.
+        # Apply field updates to one sensor (pose, gates, transport, colour, ...), persist to the DB
+        # + config file, and restart readers if a transport-affecting field changed.
         s = self.sensors_by_id.get(sensor_id)
         if s is None:
             return None
@@ -311,9 +325,36 @@ class RadarEngine:
             if hasattr(s, k):
                 setattr(s, k, v)
         self.store.upsert_sensor(s.to_dict())
+        self.save_config()
         if restart:
             self._open_inputs()
         return s
+
+    def autobaud(self, sensor_id: str, port: str = None):
+        # Probe a serial sensor's port for the right baud — SERVER-SIDE, where the port lives (so it
+        # works for a remote web client too). Frees the port, scans every candidate, applies +
+        # persists the found baud, then reopens. `port` (optional) lets the UI probe an edited-but-
+        # unsaved port. Returns the detected baud or None.
+        from radar.serial_reader import probe_baud
+        s = self.sensors_by_id.get(sensor_id)
+        if s is None:
+            return None
+        if port:
+            s.serial_port = port
+        self._close_inputs()                       # release the port so the probe can open it
+        found = None
+        try:
+            found = probe_baud(s.serial_port)
+        except Exception as exc:                   # pragma: no cover - hardware/probe error
+            self.cfg_error = f"auto-baud: {exc}"
+        if found:
+            s.serial_baud = found
+            self.store.upsert_sensor(s.to_dict()); self.save_config()
+            self.cfg_error = f"Auto-baud: {found} on {s.serial_port}"
+        elif not self.cfg_error:
+            self.cfg_error = f"Auto-baud: no LD2450 frames on {s.serial_port}"
+        self._open_inputs()
+        return found
 
     def apply_sensors(self, sensor_dicts: list):
         # Replace the whole sensor set from a list of dicts (a config form on EITHER UI), re-upsert,
@@ -330,5 +371,5 @@ class RadarEngine:
                 for s in self.sensors}
         for s in self.sensors:
             self.store.upsert_sensor(s.to_dict())
-        self.cfg["sensors"] = [s.to_dict() for s in self.sensors]
+        self.save_config()          # durable: the backend stores the new sensor set
         self._open_inputs()
