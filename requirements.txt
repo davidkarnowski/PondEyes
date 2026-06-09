@@ -2,3 +2,7 @@ pygame
 paho-mqtt
 pyserial
 cairosvg
+# web frontend backend (radar/web, webserver.py)
+fastapi
+uvicorn[standard]
+python-multipart
