@@ -11,8 +11,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
 
 #topbar { position: fixed; top: 0; left: 0; right: 0; height: 56px; display: flex;
   align-items: center; justify-content: space-between; padding: 0 18px; pointer-events: none; }
-.logo { font-size: 30px; letter-spacing: 3px; font-weight: 700; text-shadow: 0 0 8px var(--dim); }
-.logo .eyes { color: #ff3da6; }
+.logo { margin: 0; font-family: monospace; font-size: 12px; line-height: 1.05; white-space: pre;
+  color: var(--green); text-shadow: 0 0 6px var(--dim); }
 #menu { display: flex; gap: 18px; pointer-events: auto; }
 #menu button { background: none; border: none; color: var(--green); font: inherit; font-size: 17px;
   letter-spacing: 1px; cursor: pointer; padding: 4px 2px; opacity: .9; }

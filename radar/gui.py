@@ -112,6 +112,7 @@ class RadarGUI(RadarEngine):
         self.drag_slider = self.drag_level = False
         self.knob_rect = self.level_rect = pygame.Rect(0,0,0,0)
         self.heading_btn_rect = pygame.Rect(0,0,0,0)
+        self.setpos_btn_rect = pygame.Rect(0,0,0,0)   # "SET POSITION" in the heading sub-modal
         self.menu_rects, self.exit_rect = {}, pygame.Rect(0,0,0,0)
         pygame.mouse.set_cursor(*pygame.cursors.arrow)
         self._cur_cursor = None            # last system cursor set (avoid re-setting each motion)
@@ -419,6 +420,28 @@ class RadarGUI(RadarEngine):
         for i, s in enumerate(self.sensors):
             sx, sy = self.mm_to_px(*s.position)
             if math.hypot(pos[0] - sx, pos[1] - sy) <= 10:
+                return i
+        return None
+
+    @staticmethod
+    def _pt_seg_dist(p, a, b):
+        # Distance from point p to segment a-b (px).
+        (px, py), (ax, ay), (bx, by) = p, a, b
+        dx, dy = bx - ax, by - ay
+        if dx == 0 and dy == 0:
+            return math.hypot(px - ax, py - ay)
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+        return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+    def _cone_line_at(self, pos, tol=6):
+        # Sensor index whose FOV cone EDGE (fence) line is under `pos`, else None. Lets the user
+        # grab a sensor whose marker is stacked under a neighbour's by clicking its cone line.
+        for i, s in enumerate(self.sensors):
+            sx, sy = self.mm_to_px(*s.position)
+            R = (s.max_range_mm if s.max_range_mm > 0 else 5000) * self.ppm
+            edge = geometry.fov_arc_pts(sx, sy, s.heading, R, self.FOV_DEG, steps=2)  # [left, mid, right]
+            if (self._pt_seg_dist(pos, (sx, sy), edge[0]) <= tol or
+                    self._pt_seg_dist(pos, (sx, sy), edge[-1]) <= tol):
                 return i
         return None
 
@@ -840,14 +863,16 @@ class RadarGUI(RadarEngine):
 
     # ───────────────────────────────────────── heading finish button
     def _draw_heading_btn(self, slid_rect):
-        # Centered BELOW the slider (not to its right). Finalises BOTH heading and range
-        # (combined wizard screen), so it's labelled SET SENSOR.
-        btn = pygame.Rect(0, 0, 170, 32)
-        btn.midtop = (slid_rect.centerx, slid_rect.bottom + 12)
-        pygame.draw.rect(self.screen, C.GREEN, btn, 2)
-        t = C.FONT.render("SET SENSOR", True, C.GREEN)
-        self.screen.blit(t, t.get_rect(center=btn.center))
-        self.heading_btn_rect = btn
+        # Two buttons centered BELOW the slider: CONFIRM finalises heading + range; SET POSITION
+        # jumps back to re-placing the sensor on the map (when the marker is in the wrong spot).
+        cx = slid_rect.centerx
+        confirm = pygame.Rect(0, 0, 150, 32); confirm.midtop = (cx - 80, slid_rect.bottom + 12)
+        setpos  = pygame.Rect(0, 0, 150, 32); setpos.midtop  = (cx + 80, slid_rect.bottom + 12)
+        for b, lbl in ((confirm, "CONFIRM"), (setpos, "SET POSITION")):
+            pygame.draw.rect(self.screen, C.GREEN, b, 2)
+            t = C.FONT.render(lbl, True, C.GREEN); self.screen.blit(t, t.get_rect(center=b.center))
+        self.heading_btn_rect = confirm
+        self.setpos_btn_rect = setpos
 
     def _draw_wizard_range_slider(self, fidx, name, cy):
         # One wizard range slider (centered, at screen-y `cy`), sharing the SAME linked cfg
@@ -1073,6 +1098,8 @@ class RadarGUI(RadarEngine):
                     if self.heading_btn_rect.collidepoint(e.pos):
                         self.rotating_sensor=False; self.sensor_stage=None; self._sync_cfg()
                         continue
+                    if self.setpos_btn_rect.collidepoint(e.pos):   # re-place this sensor on the map
+                        self.sensor_stage="placing"; self.placing_sensor=True; continue
 
                 # CONFIG dialog events
                 if self.show_cfg:
@@ -1297,6 +1324,19 @@ class RadarGUI(RadarEngine):
                             self.drag_arc = fidx
                             self._set_range_field_from_point(fidx, e.pos)
                             continue
+
+                    # FOV fence line: single click selects, double-click opens the heading wizard —
+                    # the way to reach a sensor whose marker is stacked under a close neighbour's.
+                    if self.sensor_stage is None:
+                        cidx = self._cone_line_at(e.pos)
+                        if cidx is not None:
+                            now = time.monotonic()
+                            if cidx == self._click_marker and (now - self._click_t) < 0.4:
+                                self._click_marker = None
+                                self._select_sensor(cidx)
+                                self.rotating_sensor = True; self.sensor_stage = "heading"; continue
+                            self._click_marker = cidx; self._click_t = now
+                            self._select_sensor(cidx); continue
 
                     # placing click
                     if self.sensor_stage=="placing":
