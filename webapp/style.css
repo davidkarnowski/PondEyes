@@ -1,0 +1,68 @@
+/* webapp/style.css — PondEyes dark/green terminal aesthetic, mirroring the pygame look. */
+:root { --green: #00ff66; --dim: #00702d; --red: #ff3030; --bg: #000; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
+  font-family: "SF Mono", Menlo, monospace; color: var(--green); user-select: none; }
+
+#map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+#topbar { position: fixed; top: 0; left: 0; right: 0; height: 56px; display: flex;
+  align-items: center; justify-content: space-between; padding: 0 18px; pointer-events: none; }
+.logo { font-size: 30px; letter-spacing: 3px; font-weight: 700; text-shadow: 0 0 8px var(--dim); }
+.logo .eyes { color: #ff3da6; }
+#menu { display: flex; gap: 18px; pointer-events: auto; }
+#menu button { background: none; border: none; color: var(--green); font: inherit; font-size: 17px;
+  letter-spacing: 1px; cursor: pointer; padding: 4px 2px; opacity: .9; }
+#menu button:hover { text-shadow: 0 0 8px var(--green); }
+#menu button.off { color: var(--dim); }
+#menu button.on  { color: var(--green); }
+#menu button.night-on { color: var(--red); }
+
+#zoomctl { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); display: flex;
+  flex-direction: column; align-items: center; gap: 8px; background: rgba(0,0,0,.45);
+  padding: 10px 6px; border-radius: 8px; }
+#zoomlabel { font-size: 12px; }
+#zoom { writing-mode: vertical-lr; direction: rtl; width: 8px; height: 200px; accent-color: var(--green); }
+#resetview { background: none; border: 1px solid var(--green); color: var(--green); font: inherit;
+  font-size: 12px; cursor: pointer; border-radius: 4px; padding: 2px 6px; }
+
+#hud { position: fixed; left: 12px; bottom: 10px; font-size: 14px; line-height: 1.5; pointer-events: none; }
+#debug { color: var(--green); margin-top: 6px; opacity: .9; }
+#clock { position: fixed; right: 16px; bottom: 8px; font-size: 46px; font-weight: 700;
+  letter-spacing: 2px; pointer-events: none; }
+#banner { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 40px; font-weight: 700; color: var(--red); pointer-events: none;
+  animation: blink 1s steps(2,start) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+#ctxmenu { position: fixed; background: var(--bg); border: 1px solid var(--green); border-radius: 4px;
+  display: flex; flex-direction: column; z-index: 20; }
+#ctxmenu button { background: none; border: none; color: var(--green); font: inherit; text-align: left;
+  padding: 6px 16px; cursor: pointer; }
+#ctxmenu button:hover { background: var(--dim); }
+
+aside { position: fixed; top: 0; right: 0; height: 100%; width: 380px; background: rgba(4,10,4,.96);
+  border-left: 2px solid var(--green); padding: 14px; overflow-y: auto; z-index: 15; }
+aside header { display: flex; justify-content: space-between; align-items: center; font-size: 20px;
+  letter-spacing: 2px; border-bottom: 1px solid var(--dim); padding-bottom: 8px; margin-bottom: 12px; }
+aside header button { background: none; border: 1px solid var(--green); color: var(--green);
+  cursor: pointer; border-radius: 4px; width: 28px; height: 28px; font-size: 14px; }
+.sensor-card { border: 1px solid var(--dim); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+.sensor-card .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+label { font-size: 13px; min-width: 92px; opacity: .85; }
+input[type=text], input[type=number], select { background: #020; border: 1px solid var(--dim);
+  color: var(--green); font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 4px; flex: 1; }
+input[type=color] { width: 36px; height: 26px; background: none; border: none; }
+aside footer { display: flex; gap: 12px; align-items: center; margin-top: 14px; }
+aside footer button, #config-globals button { background: none; border: 1px solid var(--green);
+  color: var(--green); font: inherit; cursor: pointer; padding: 6px 14px; border-radius: 4px; }
+#config-status { font-size: 12px; color: var(--red); }
+#track-list .track { border: 1px solid var(--dim); border-radius: 4px; padding: 7px 10px; margin: 6px 0;
+  cursor: pointer; font-size: 13px; }
+#track-list .track:hover { background: var(--dim); }
+#playback-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+#playback-controls button { background: none; border: 1px solid var(--green); color: var(--green);
+  cursor: pointer; border-radius: 4px; width: 34px; height: 30px; }
+#pb-scrub { flex: 1; accent-color: var(--green); }
+.globalrow { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+.globalrow input[type=range] { flex: 1; accent-color: var(--green); }

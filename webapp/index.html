@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>PondEyes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- the live radar map: SVG background image painted under a canvas overlay -->
+  <canvas id="map"></canvas>
+
+  <!-- header: logo + menu (toggles mirror the pygame top menu) -->
+  <header id="topbar">
+    <span class="logo">POND<span class="eyes">::</span>EYES</span>
+    <nav id="menu">
+      <button data-act="playback">PLAYBACK</button>
+      <button data-toggle="sound">SOUND</button>
+      <button data-toggle="night">NIGHT</button>
+      <button data-toggle="smoothing_on">SMOOTH</button>
+      <button data-toggle="trail_on">TRAIL</button>
+      <button data-act="config">CONFIG</button>
+      <button data-act="fullscreen">FULL&nbsp;SCREEN</button>
+    </nav>
+  </header>
+
+  <!-- vertical zoom control on the right edge (mirrors the pygame slider) -->
+  <div id="zoomctl">
+    <span id="zoomlabel">1.0x</span>
+    <input id="zoom" type="range" min="1" max="8" step="0.05" value="1" orient="vertical">
+    <button id="resetview" title="reset to fit">1:1</button>
+  </div>
+
+  <!-- bottom-left HUD: recent targets + debug line; data-loss banner overlays center -->
+  <div id="hud">
+    <div id="recent"></div>
+    <div id="debug"></div>
+  </div>
+  <div id="clock"></div>
+  <div id="banner" hidden>DATA STREAM CONNECTION LOST</div>
+
+  <!-- right-click context menu on a target -->
+  <div id="ctxmenu" hidden>
+    <button data-ctx="silence">Silence</button>
+    <button data-ctx="ghost">Ghost</button>
+  </div>
+
+  <!-- CONFIG drawer: per-sensor editor + global toggles (native HTML inputs) -->
+  <aside id="config" hidden>
+    <header>CONFIG <button id="config-x" title="close">✕</button></header>
+    <div id="sensor-list"></div>
+    <div id="config-globals"></div>
+    <footer>
+      <button id="config-apply">APPLY</button>
+      <span id="config-status"></span>
+    </footer>
+  </aside>
+
+  <!-- PLAYBACK drawer: track browser + replay scrubber -->
+  <aside id="playback" hidden>
+    <header>PLAYBACK <button id="playback-x" title="close">✕</button></header>
+    <div id="track-list"></div>
+    <div id="playback-controls" hidden>
+      <button id="pb-play">⏸</button>
+      <input id="pb-scrub" type="range" min="0" max="100" value="0">
+      <span id="pb-clock"></span>
+    </div>
+  </aside>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
