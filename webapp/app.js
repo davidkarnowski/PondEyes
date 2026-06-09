@@ -26,6 +26,7 @@ const state = {
   sel: null,             // selected sensor id (shows the heading handle; enables drag-edit)
   editDrag: null,        // {id, type:'move'|'aim'|'min'|'max'} during a sensor edit drag
   override: null,        // {id, ...fields} live-preview override applied over the WS snapshot
+  ctxSerial: null,       // serial the right-click menu is anchored to (so it floats with the target)
 };
 
 // ── sizing ────────────────────────────────────────────────────────────────────────────────
@@ -113,6 +114,7 @@ function frame(tms) {
   if (state.night) { ctx.fillStyle = "rgba(255,0,0,0.30)"; ctx.fillRect(0, 0, innerWidth, innerHeight); }
 
   if (!state.playback) beep(snap, now);
+  positionCtxMenu();                                      // float the context menu with its target
   updateHud(snap);
   requestAnimationFrame(frame);
 }
@@ -261,7 +263,7 @@ function drawEditHandles(c, s) {
 }
 
 // ── proximity beep (Web Audio) — fastest in-range, non-silenced/ghosted target; SOUND-gated ────
-let audioCtx = null, lastBeep = 0, lastTargetSeen = 0, lastProx = 0;
+let audioCtx = null, lastBeep = 0, lastTargetSeen = 0, lastN = 0;
 function ensureAudio() {
   // Browsers block audio until a user gesture; create + resume the context on any interaction.
   try {
@@ -274,28 +276,21 @@ addEventListener("keydown", ensureAudio);
 function beep(snap, now) {
   if (!state.globals.sound || !audioCtx) return;
   if (audioCtx.state !== "running") { audioCtx.resume(); return; }      // still locked — wake + skip
-  // proximity-reactive: the CLOSEST audible target to its sensor drives pitch + rate (parking-
-  // sensor feel) — closer => higher + faster, up to ~10 beeps/s right at the sensor.
-  const byId = Object.fromEntries(snap.sensors.map((s) => [s.id, s]));
-  let prox = 0, any = false;                                            // 0 = far/gate edge, 1 = at sensor
-  for (const t of snap.targets) {
-    if (t.silence || t.ghost) continue;
-    const s = byId[t.sensor_id]; if (!s) continue;
-    any = true;
-    const range = s.max_range_mm > 0 ? s.max_range_mm : 8000;
-    const dist = Math.hypot(t.x - s.x, t.y - s.y);
-    prox = Math.max(prox, Math.min(1, Math.max(0, 1 - dist / range)));
-  }
-  if (any) { lastTargetSeen = now; lastProx = prox; }
-  // HOLD through brief radar dropouts: real LD2450 tracks blink out for a frame or two, which made
-  // the beep stutter. Keep beeping for ~0.6s after the last sighting, at the last proximity.
-  if (now - lastTargetSeen > 0.6) return;
-  const p = any ? prox : lastProx;
-  if (now - lastBeep < 0.7 - p * 0.62) return;                         // 0.7s far -> ~0.08s at the sensor
+  // SAME method as the pygame UI: speed-based. n = fastest audible target's speed / MAX_V (4000);
+  // freq 700..1400 Hz; interval 0.6 - n*0.45 s. The only web-specific addition is a brief HOLD
+  // below, because the websocket path occasionally blinks a track out for a frame (the in-process
+  // pygame UI doesn't), which made the beep stutter.
+  const audible = snap.targets.filter((t) => !t.silence && !t.ghost);
+  const any = audible.length > 0;
+  let n = Math.min(1, audible.reduce((m, t) => Math.max(m, t.v || 0), 0) / 4000);
+  if (any) { lastTargetSeen = now; lastN = n; }
+  if (now - lastTargetSeen > 0.6) return;                               // truly no target -> silent
+  n = any ? n : lastN;                                                  // ride out a brief dropout
+  if (now - lastBeep < 0.6 - n * 0.45) return;
   lastBeep = now;
   try {
     const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
-    osc.frequency.value = 600 + p * 1100; g.gain.value = 0.15;          // 600 -> 1700 Hz with proximity
+    osc.frequency.value = 700 + 700 * n; g.gain.value = 0.15;
     osc.connect(g); g.connect(audioCtx.destination);
     osc.start(); osc.stop(audioCtx.currentTime + 0.06);
   } catch (e) { /* ignore */ }
@@ -323,18 +318,31 @@ canvas.addEventListener("contextmenu", (e) => {
   const m = document.getElementById("ctxmenu");
   if (!ser) { m.hidden = true; return; }
   const f = targetFlags(ser);
-  m.dataset.serial = ser; m.style.left = e.clientX + "px"; m.style.top = e.clientY + "px"; m.hidden = false;
+  m.dataset.serial = ser; state.ctxSerial = ser; m.hidden = false;
   m.querySelector('[data-ctx="silence"]').textContent = f.silence ? "Unsilence" : "Silence";
   m.querySelector('[data-ctx="ghost"]').textContent = f.ghost ? "Unghost" : "Ghost";
+  positionCtxMenu();                                  // place it (anchored to the target, clamped)
 });
+// Keep the menu glued to its target + on-screen as the map pans/zooms or the target moves.
+function positionCtxMenu() {
+  const m = document.getElementById("ctxmenu");
+  if (m.hidden || !state.ctxSerial) return;
+  const t = state.snap.targets.find((x) => x.serial === state.ctxSerial);
+  if (!t) return;                                     // target gone this frame: hold last position
+  const [px, py] = view.worldToPx(t.x, t.y);
+  const r = m.getBoundingClientRect();
+  const x = Math.max(4, Math.min(innerWidth - r.width - 4, px + 12));
+  const y = Math.max(4, Math.min(innerHeight - r.height - 4, py + 12));
+  m.style.left = x + "px"; m.style.top = y + "px";
+}
 document.getElementById("ctxmenu").addEventListener("click", async (e) => {
   const m = document.getElementById("ctxmenu"); const ser = m.dataset.serial; const act = e.target.dataset.ctx;
   const f = targetFlags(ser);
   const patch = act === "silence" ? { silence: !f.silence } : act === "ghost" ? { ghost: !f.ghost } : null;
-  m.hidden = true;                                  // ghost/silence are BACKEND state -> POST, shared with pygame
+  m.hidden = true; state.ctxSerial = null;          // ghost/silence are BACKEND state -> POST, shared with pygame
   if (patch) await fetch(`/api/targets/${ser}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
 });
-addEventListener("click", (e) => { if (!e.target.closest("#ctxmenu")) document.getElementById("ctxmenu").hidden = true; });
+addEventListener("click", (e) => { if (!e.target.closest("#ctxmenu")) { document.getElementById("ctxmenu").hidden = true; state.ctxSerial = null; } });
 function toggleSet(set, v) { set.has(v) ? set.delete(v) : set.add(v); }
 function targetAt(cx, cy) {
   let best = null, bd = 18;
