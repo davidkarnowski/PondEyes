@@ -45,8 +45,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
   padding: 6px 16px; cursor: pointer; }
 #ctxmenu button:hover { background: var(--dim); }
 
-aside { position: fixed; top: 0; right: 0; height: 100%; width: 380px; background: rgba(4,10,4,.96);
-  border-left: 2px solid var(--green); padding: 14px; overflow-y: auto; z-index: 15; }
+aside { position: fixed; top: 56px; right: 0; height: calc(100% - 56px); width: 380px;
+  background: rgba(4,10,4,.96); border-left: 2px solid var(--green); border-top: 1px solid var(--dim);
+  padding: 14px; overflow-y: auto; z-index: 15; }   /* starts BELOW the header menu row */
 aside header { display: flex; justify-content: space-between; align-items: center; font-size: 20px;
   letter-spacing: 2px; border-bottom: 1px solid var(--dim); padding-bottom: 8px; margin-bottom: 12px; }
 aside header button { background: none; border: 1px solid var(--green); color: var(--green);
