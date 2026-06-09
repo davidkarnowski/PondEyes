@@ -146,8 +146,9 @@ function updateHud(snap) {
   const dbg = (snap.sensors || []).map((s) => {
     const st = (snap.stats || {})[s.id] || {}; return `${s.id}:${(st.hz || 0).toFixed(1)}Hz`;
   }).join("  ");
+  const aud = audioCtx ? audioCtx.state : "none";
   document.getElementById("debug").textContent =
-    `${dbg}  targets=${(snap.targets || []).length}`;
+    `${dbg}  targets=${(snap.targets || []).length}  audio=${aud}/${state.globals.sound ? "SOUND-on" : "SOUND-off"}`;
   document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-GB");
   document.getElementById("banner").hidden = !snap.data_lost || !!state.playback;
 }
@@ -265,23 +266,34 @@ function ensureAudio() {
   // Browsers block audio until a user gesture; create + resume the context on any interaction.
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
+    if (audioCtx.state !== "running") audioCtx.resume();
   } catch (e) { /* no audio available */ }
 }
 addEventListener("pointerdown", ensureAudio);   // unlock audio on the first click/touch anywhere
+addEventListener("keydown", ensureAudio);
 function beep(snap, now) {
-  if (!state.globals.sound || !audioCtx || audioCtx.state !== "running") return;
-  const audible = snap.targets.filter((t) => !t.silence && !t.ghost);   // backend-shared flags
-  if (!audible.length) return;
-  const fastest = audible.reduce((m, t) => Math.max(m, t.v || 0), 0);
-  const n = Math.min(1, fastest / 4000);
-  if (now - lastBeep < 0.6 - n * 0.45) return;
+  if (!state.globals.sound || !audioCtx) return;
+  if (audioCtx.state !== "running") { audioCtx.resume(); return; }      // still locked — wake + skip
+  // proximity-reactive: the CLOSEST audible target to its sensor drives pitch + rate (parking-
+  // sensor feel) — closer => higher + faster, up to ~10 beeps/s right at the sensor.
+  const byId = Object.fromEntries(snap.sensors.map((s) => [s.id, s]));
+  let prox = 0, any = false;                                            // 0 = far/gate edge, 1 = at sensor
+  for (const t of snap.targets) {
+    if (t.silence || t.ghost) continue;
+    const s = byId[t.sensor_id]; if (!s) continue;
+    any = true;
+    const range = s.max_range_mm > 0 ? s.max_range_mm : 8000;
+    const dist = Math.hypot(t.x - s.x, t.y - s.y);
+    prox = Math.max(prox, Math.min(1, Math.max(0, 1 - dist / range)));
+  }
+  if (!any) return;
+  if (now - lastBeep < 0.7 - prox * 0.62) return;                      // 0.7s far -> ~0.08s at the sensor
   lastBeep = now;
   try {
     const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
-    osc.frequency.value = 700 + 700 * n; g.gain.value = 0.06;
+    osc.frequency.value = 600 + prox * 1100; g.gain.value = 0.15;       // 600 -> 1700 Hz with proximity
     osc.connect(g); g.connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.05);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.06);
   } catch (e) { /* ignore */ }
 }
 canvas.addEventListener("wheel", (e) => {
