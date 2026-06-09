@@ -261,7 +261,7 @@ function drawEditHandles(c, s) {
 }
 
 // ── proximity beep (Web Audio) — fastest in-range, non-silenced/ghosted target; SOUND-gated ────
-let audioCtx = null, lastBeep = 0;
+let audioCtx = null, lastBeep = 0, lastTargetSeen = 0, lastProx = 0;
 function ensureAudio() {
   // Browsers block audio until a user gesture; create + resume the context on any interaction.
   try {
@@ -286,12 +286,16 @@ function beep(snap, now) {
     const dist = Math.hypot(t.x - s.x, t.y - s.y);
     prox = Math.max(prox, Math.min(1, Math.max(0, 1 - dist / range)));
   }
-  if (!any) return;
-  if (now - lastBeep < 0.7 - prox * 0.62) return;                      // 0.7s far -> ~0.08s at the sensor
+  if (any) { lastTargetSeen = now; lastProx = prox; }
+  // HOLD through brief radar dropouts: real LD2450 tracks blink out for a frame or two, which made
+  // the beep stutter. Keep beeping for ~0.6s after the last sighting, at the last proximity.
+  if (now - lastTargetSeen > 0.6) return;
+  const p = any ? prox : lastProx;
+  if (now - lastBeep < 0.7 - p * 0.62) return;                         // 0.7s far -> ~0.08s at the sensor
   lastBeep = now;
   try {
     const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
-    osc.frequency.value = 600 + prox * 1100; g.gain.value = 0.15;       // 600 -> 1700 Hz with proximity
+    osc.frequency.value = 600 + p * 1100; g.gain.value = 0.15;          // 600 -> 1700 Hz with proximity
     osc.connect(g); g.connect(audioCtx.destination);
     osc.start(); osc.stop(audioCtx.currentTime + 0.06);
   } catch (e) { /* ignore */ }
