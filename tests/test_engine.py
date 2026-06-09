@@ -81,6 +81,31 @@ def test_data_loss_watchdog_flips_and_recovers(tmp_path, monkeypatch):
         eng.shutdown()
 
 
+def test_sim_mode_runs_serial_sensor_without_hardware(tmp_path, monkeypatch):
+    from radar import constants as C
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    eng = RadarEngine(_cfg([
+        {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "serial",
+         "serial_port": "/dev/cu.does-not-exist", "serial_baud": 256000,
+         "position": [0, 0], "heading": 0.0}]), sim=True)
+    try:
+        eng.start()                       # would bind a (missing) serial port if sim weren't forcing it
+        assert type(eng.readers["S1"]).__name__ == "FakeReader"   # simulated despite serial config
+        assert eng.sensors_by_id["S1"].input_mode == "serial"     # stored mode UNCHANGED (sim not persisted)
+    finally:
+        eng.shutdown()
+
+
+def test_sim_mode_injects_demo_when_no_sensors(tmp_path, monkeypatch):
+    from radar import constants as C
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    eng = RadarEngine(_cfg([]), sim=True)            # no sensors configured + sim
+    try:
+        assert len(eng.sensors) == 1 and eng.sensors[0].input_mode == "sim"
+    finally:
+        eng.shutdown()
+
+
 def test_update_sensor_persists_and_resyncs(tmp_path, monkeypatch):
     eng = _engine(tmp_path, monkeypatch, [
         {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",

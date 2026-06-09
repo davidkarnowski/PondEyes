@@ -51,11 +51,11 @@ class RadarGUI(RadarEngine):
     MAX_ZOOM         = 8.0             # viewport zoom ceiling (1.0 = fit-to-window)
 
     # ────────────────────────────────────────────────── INIT
-    def __init__(self, cfg: dict) -> None:
+    def __init__(self, cfg: dict, sim: bool = False) -> None:
         # Engine first: cfg, sensors, store, tracker, readers dict, per-sensor live state, smoothing,
         # stats, lock, watchdog flags. Readers are NOT started here (we start them at the end of
-        # __init__, once the render state is ready).
-        super().__init__(cfg)
+        # __init__, once the render state is ready). sim=True runs simulated readers (no hardware).
+        super().__init__(cfg, sim=sim)
 
         # ―― Pygame window
         self.screen = pygame.display.set_mode((1100, 750), pygame.RESIZABLE)

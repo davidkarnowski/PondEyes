@@ -26,13 +26,15 @@ def main():
     ap = argparse.ArgumentParser(description="PondEyes web backend")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--sim", action="store_true",
+                    help="run all sensors as SIMULATED (no hardware needed; saved config untouched)")
     args = ap.parse_args()
 
     cfg = config.load()
-    engine = RadarEngine(cfg)
-    engine.start()                       # spawn the per-sensor readers
-    log.info("PondEyes web backend on http://%s:%d  (%d sensor(s))",
-             args.host, args.port, len(engine.sensors))
+    engine = RadarEngine(cfg, sim=args.sim)
+    engine.start()                       # spawn the per-sensor readers (simulated if --sim)
+    log.info("PondEyes web backend on http://%s:%d  (%d sensor(s), sim=%s)",
+             args.host, args.port, len(engine.sensors), args.sim)
     app = create_app(engine)
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")

@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 import math, time, collections, threading
+from dataclasses import replace
 from typing import Dict, List, Tuple
 
 from radar import constants as C
@@ -40,12 +41,21 @@ class RadarEngine:
     DATA_TIMEOUT_SEC = 1.0            # gap (ALL sensors quiet) that flags global data loss
     MARKER_STALE_SEC = 1.5            # per-sensor: drop a quiet sensor's live markers after this gap
 
-    def __init__(self, cfg: dict, store_path=None) -> None:
+    def __init__(self, cfg: dict, store_path=None, sim: bool = False) -> None:
         # cfg is the loaded radar_config.json (schema v2). We never touch pygame here.
+        # sim=True forces every sensor's reader to a FakeReader (simulated targets) regardless of its
+        # configured transport, so the app runs with NO hardware connected. Sensors keep their real
+        # pose/colour/gates AND their stored input_mode — sim is a runtime override, NOT persisted —
+        # so the map looks exactly like the live rig, just with simulated motion.
         self.cfg = cfg
+        self.force_sim = bool(sim)
 
         # ―― Sensors (the multi-sensor data model)
-        self.sensors: List[Sensor] = [Sensor.from_dict(s) for s in cfg["sensors"]]
+        self.sensors: List[Sensor] = [Sensor.from_dict(s) for s in cfg.get("sensors", [])]
+        if self.force_sim and not self.sensors:
+            # Nothing configured + sim: give the sim a default sensor so the app is still usable.
+            self.sensors = [Sensor(id="SIM", label="Sim", color="#00ff88", input_mode="sim",
+                                   position=(2000.0, 2000.0), heading=0.0, max_range_mm=8000.0)]
         self.sensors_by_id: Dict[str, Sensor] = {s.id: s for s in self.sensors}
 
         # ―― Smoothing parameters (used by _avg_motion / _win); render-side toggles live in the GUI
@@ -102,8 +112,11 @@ class RadarEngine:
             if not s.enabled:
                 continue
             cb = (lambda lst, t, sid=s.id: self._on_frame(sid, lst, t))   # tag with sensor id + capture time
+            # In sim mode, build a FakeReader from a sim VIEW of the sensor (its real input_mode is
+            # left untouched, so config isn't corrupted); frames still attribute to the real s.id.
+            reader_sensor = replace(s, input_mode="sim") if self.force_sim else s
             try:
-                r = make_reader(s, cb)
+                r = make_reader(reader_sensor, cb)
                 r.start()
             except OSError as exc:
                 # e.g. MQTT broker unreachable — leave this sensor without a reader; the data-loss
