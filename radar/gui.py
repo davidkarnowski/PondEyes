@@ -90,6 +90,7 @@ class RadarGUI(RadarEngine):
         self.CURSOR_IDLE_SEC = 3.0
         self._last_mouse_active = time.monotonic()
         self._cursor_visible = True
+        self.menu_open = False                  # small-screen collapsed-menu (hamburger) open state
 
         # ―― Layout & sensor pose
         self.full_screen = start_fullscreen   # reuse the existing FULL_SCREEN/EXIT_FULL toggle path
@@ -133,7 +134,7 @@ class RadarGUI(RadarEngine):
 
         # ―― Trails (render-side, px coords) — motion_hist (smoothing) lives in the engine.
         self.trail_duration = float(cfg.get("trail_duration", 5.0))
-        self.trails:  dict[str, collections.deque] = {}       # ser → deque[(px,py,t,col)]
+        self.trails:  dict[str, collections.deque] = {}       # ser → deque[(wx,wy,t,col)] world-mm
         self.pulse_phase: dict[str, float] = {}
 
         # ―― Interaction & wizard
@@ -675,24 +676,32 @@ class RadarGUI(RadarEngine):
             for k, s in surfs:
                 rr = s.get_rect(); rr.topright = (x, y); self.screen.blit(s, rr); r[k] = rr; x = rr.left - GAP
         else:
-            top = (10 + C.ASCII_H + 6) if self._show_logo() else 30   # clear the top edge / logo
-            line_h = f.get_height() + 10
-            rows, cur, cur_w = [], [], 0               # greedy-pack into rows that fit the width
-            for k, s in surfs:
-                w = s.get_width()
-                if cur and cur_w + GAP + w > W - 16:
-                    rows.append(cur); cur, cur_w = [], 0
-                cur.append((k, s)); cur_w += (GAP if cur_w else 0) + w
-            if cur: rows.append(cur)
-            bar = pygame.Surface((W, line_h * len(rows) + 8), pygame.SRCALPHA); bar.fill((0, 0, 0, 160))
-            self.screen.blit(bar, (0, top - 4))
-            y = top
-            for row in rows:
-                row_w = sum(s.get_width() for _, s in row) + GAP * (len(row) - 1)
-                x = (W - row_w) // 2
-                for k, s in row:
-                    rr = s.get_rect(); rr.topleft = (x, y); self.screen.blit(s, rr); r[k] = rr; x = rr.right + GAP
-                y += line_h
+            # Small screen: collapse to a single ☰ MENU button pulled in from the corner; tapping it
+            # opens a vertical dropdown of full-width, finger-sized rows. Keeps the map view clean.
+            # "MENU" button + a DRAWN hamburger icon (a unicode ☰ renders as tofu in the mono font).
+            # Pulled in from the corner — the top-right edge is this panel's flakiest touch zone, so a
+            # corner button both mis-taps and catches spurious edge touches.
+            lbl = f.render("MENU", True, C.GREEN); icon_w = 22
+            btn = pygame.Rect(0, 0, lbl.get_width() + icon_w + 30, f.get_height() + 18)
+            btn.topright = (W - 24, 26)
+            pygame.draw.rect(self.screen, C.BLACK, btn); pygame.draw.rect(self.screen, C.GREEN, btn, 2)
+            ix, iy = btn.x + 12, btn.centery - 6
+            for dy in (0, 6, 12):                        # 3-line hamburger
+                pygame.draw.line(self.screen, C.GREEN, (ix, iy + dy), (ix + icon_w - 6, iy + dy), 2)
+            self.screen.blit(lbl, lbl.get_rect(midleft=(ix + icon_w, btn.centery)))
+            r["menu_toggle"] = btn
+            if self.menu_open:
+                rowh = f.get_height() + 18                  # generous touch rows
+                pw = max(s.get_width() for _, s in surfs) + 44
+                px = W - 14 - pw; py = btn.bottom + 6
+                panel = pygame.Rect(px, py, pw, rowh * len(surfs) + 8)
+                ov = pygame.Surface(panel.size, pygame.SRCALPHA); ov.fill((0, 0, 0, 225))
+                self.screen.blit(ov, panel.topleft); pygame.draw.rect(self.screen, C.GREEN, panel, 2)
+                yy = py + 4
+                for k, s in surfs:
+                    rr = pygame.Rect(px + 4, yy, pw - 8, rowh)
+                    self.screen.blit(s, s.get_rect(midleft=(rr.x + 14, rr.centery)))
+                    r[k] = rr; yy += rowh
         r["h"] = f.get_height(); self.menu_rects = r
 
     # ───────────────────────────────────────── rotation slider
@@ -718,9 +727,11 @@ class RadarGUI(RadarEngine):
         # collisions. Layout: sensor list -> add/remove/dup -> selected-sensor editor (input
         # mode + fields + colour picker) -> map -> smoothing -> action buttons.
         from os.path import basename
-        w, h = 660, 640
-        rect = pygame.Rect((self.screen.get_width()-w)//2,
-                           (self.screen.get_height()-h)//2, w, h)
+        # Fit the dialog inside the screen so it never runs off the edges on a small panel
+        # (was a fixed 660x640, which on a 480px-wide screen started at x=-90 — half off-screen).
+        W, H = self.screen.get_width(), self.screen.get_height()
+        w, h = min(660, W - 16), min(640, H - 16)
+        rect = pygame.Rect((W - w)//2, (H - h)//2, w, h)
         pygame.draw.rect(self.screen, C.BLACK, rect)
         pygame.draw.rect(self.screen, C.GREEN, rect, 2)
         # X close button (top-right) — same effect as CANCEL
@@ -1344,25 +1355,34 @@ class RadarGUI(RadarEngine):
 
                     m=self.menu_rects
                     if self.sensor_stage is None and m:
-                        if not self.map_mode and m["full"].collidepoint(e.pos):
-                            pygame.display.toggle_fullscreen()
+                        # Hamburger toggle (small-screen collapsed menu)
+                        if "menu_toggle" in m and m["menu_toggle"].collidepoint(e.pos):
+                            self.menu_open = not self.menu_open; continue
+                        # Item present (guards the collapsed dropdown) AND tapped, while NOT in map mode
+                        def _hit(key):
+                            return key in m and not self.map_mode and m[key].collidepoint(e.pos)
+                        if _hit("full"):
+                            self.menu_open=False; pygame.display.toggle_fullscreen()
                             self.full_screen=not self.full_screen; self.refresh_map(); continue
-                        if not self.map_mode and "map" in m and m["map"].collidepoint(e.pos):
-                            self.map_mode=True; self.top_pad=self.bottom_pad=C.MAP_BORDER
-                            self.refresh_map(); continue
-                        if not self.map_mode and m["config"].collidepoint(e.pos):
-                            self.show_cfg=True; self.cur_vis=0; self.cur_field=self.visible_idx[0]; self.cfg_error=""; continue
-                        if not self.map_mode and m["trail"].collidepoint(e.pos):
-                            self._toggle_all_trails(); continue   # master: trails for ALL sensors
-                        if not self.map_mode and m["smooth"].collidepoint(e.pos):
-                            self.smoothing_on=not self.smoothing_on; self._sync_cfg(); continue
-                        if not self.map_mode and m["night"].collidepoint(e.pos):
-                            self.night_mode=not self.night_mode; self._sync_cfg(); continue
-                        if not self.map_mode and m["sound"].collidepoint(e.pos):
-                            self.sound_on=not self.sound_on; self._sync_cfg(); continue
-                        if not self.map_mode and m["playback"].collidepoint(e.pos):
-                                self._launch_playback()
-                                continue                            
+                        if _hit("map"):
+                            self.menu_open=False; self.map_mode=True
+                            self.top_pad=self.bottom_pad=C.MAP_BORDER; self.refresh_map(); continue
+                        if _hit("config"):
+                            self.menu_open=False; self.show_cfg=True; self.cur_vis=0
+                            self.cur_field=self.visible_idx[0]; self.cfg_error=""; continue
+                        if _hit("trail"):
+                            self.menu_open=False; self._toggle_all_trails(); continue   # master: ALL sensors
+                        if _hit("smooth"):
+                            self.menu_open=False; self.smoothing_on=not self.smoothing_on; self._sync_cfg(); continue
+                        if _hit("night"):
+                            self.menu_open=False; self.night_mode=not self.night_mode; self._sync_cfg(); continue
+                        if _hit("sound"):
+                            self.menu_open=False; self.sound_on=not self.sound_on; self._sync_cfg(); continue
+                        if _hit("playback"):
+                            self.menu_open=False; self._launch_playback(); continue
+                        # Tap anywhere else while the dropdown is open -> dismiss it (small-screen only)
+                        if "menu_toggle" in m and self.menu_open:
+                            self.menu_open=False; continue
 
                     # sensor marker: single click selects it, DOUBLE click opens the SET SENSOR
                     # wizard for it.
@@ -1620,16 +1640,20 @@ class RadarGUI(RadarEngine):
                     ghost = ser in self.ghosted
                     if not muted and not ghost:          # silenced/ghosted targets don't drive the beep
                         any_audible=True; visible_fastest=max(visible_fastest, av)
-                    px,py=self.mm_to_px(*s.local_to_world(ax,ay))   # this sensor's projection
+                    wx,wy=s.local_to_world(ax,ay)                   # WORLD-mm (pan/zoom-independent)
+                    px,py=self.mm_to_px(wx,wy)                      # this sensor's projection -> screen px
                     self.target_hits.append((px, py, ser))
                     norm=min(1.0,av/self.MAX_V)                     # speed -> pulse-ring size only
                     col=colors.hex_to_rgb(s.color)                  # EXACT sensor colour (no tint)
+                    # Store trail points in WORLD-mm and re-project every frame, so a fading trail
+                    # stays glued to where the target was as the map is panned/zoomed.
                     trail=self.trails.setdefault(ser,collections.deque())
-                    trail.append((px,py,now,col))
+                    trail.append((wx,wy,now,col))
                     while trail and now-trail[0][2]>self.trail_duration:
                         trail.popleft()
                     if self.trail_on and s.trail_on and not ghost:  # ghosted = false reading, no trail
-                        render.draw_trail(self.screen, trail, now, self.trail_duration, skip_pos=(px,py))
+                        proj=[self.mm_to_px(tx,ty)+(tt,tc) for (tx,ty,tt,tc) in trail]
+                        render.draw_trail(self.screen, proj, now, self.trail_duration, skip_pos=(px,py))
                     ph=self.pulse_phase.get(ser,0.0)+dt_frame
                     self.pulse_phase[ser]=ph%1.0
                     render.draw_target(self.screen, px, py, col, pulse=ph, speed_norm=norm,
