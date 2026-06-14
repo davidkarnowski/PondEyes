@@ -1,13 +1,48 @@
-"""Tiny sine-wave beep cache so we don't hit the mixer every frame."""
+# radar.sound
+# ===========
+#
+# Tiny sine-wave beep cache so we don't synthesise a tone on the mixer every frame.
+#
+# Pi note: pygame.mixer.init() is attempted ONCE at import. On a headless Pi (or any host with
+# no configured audio device) it raises pygame.error — so we guard it. When the mixer is
+# unavailable the app stays fully functional and just runs SILENT: beep() returns a no-op stand-in
+# whose .play() does nothing, so the call site `beep(freq).play()` needs no change. Setting
+# SDL_AUDIODRIVER=dummy makes init() succeed silently instead (AVAILABLE stays True, no real sound).
+
 import math
 from array import array
 import pygame
 
-pygame.mixer.pre_init(44100, -16, 1, 512)
-pygame.mixer.init()
+from radar.logging_setup import get_logger
+
+log = get_logger("sound")
+
+# Try to bring up the mixer. If there's no audio device, degrade to silence instead of crashing
+# the whole pygame app at import time (which is what happens on a Pi with audio unconfigured).
+AVAILABLE = False
+try:
+    pygame.mixer.pre_init(44100, -16, 1, 512)
+    pygame.mixer.init()
+    AVAILABLE = True
+except pygame.error as exc:
+    log.warning("audio mixer unavailable (%s) — beeps disabled", exc)
+
 _cache = {}
 
+
+# A stand-in returned when audio is unavailable: its .play() is a no-op, so every existing
+# `beep(...).play()` call keeps working without a None check at the call site.
+class _Silent:
+    def play(self, *a, **k):
+        return None
+
+
+_SILENT = _Silent()
+
+
 def beep(freq, dur=0.08, vol=0.5, sr=44100):
+    if not AVAILABLE:
+        return _SILENT                       # no audio device: silent no-op
     key = (freq, dur)
     if key not in _cache:
         buf = array(
@@ -19,4 +54,3 @@ def beep(freq, dur=0.08, vol=0.5, sr=44100):
         s.set_volume(vol)
         _cache[key] = s
     return _cache[key]
-
