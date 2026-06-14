@@ -86,6 +86,10 @@ class RadarGUI(RadarEngine):
         # (Desktop: identical to the old C.FONT/C.SMALL_FONT sizes; small screens: floored up.)
         self.readout_font = pygame.font.SysFont("monospace", max(16, round(18 * self.ui_scale)))
         self.recent_font  = pygame.font.SysFont("monospace", max(14, round(14 * self.ui_scale)))
+        # CONFIG dialog fonts: readable floor so the modal stays legible/tappable on a small panel
+        # (the dialog temporarily swaps these in for C.FONT/C.SMALL_FONT — see _draw_cfg_popup).
+        self.cfg_font  = pygame.font.SysFont("monospace", max(16, round(18 * self.ui_scale)))
+        self.cfg_small = pygame.font.SysFont("monospace", max(14, round(14 * self.ui_scale)))
         # Cursor handling: auto-hide in fullscreen after idle; Touchscreen Mode hides it always.
         self.CURSOR_IDLE_SEC = 3.0
         self._last_mouse_active = time.monotonic()
@@ -723,6 +727,18 @@ class RadarGUI(RadarEngine):
 
     # ───────────────────────────────────────── CONFIG pop-up
     def _draw_cfg_popup(self):
+        # On a small screen the global fonts are scaled tiny for the map view, but the CONFIG modal
+        # must stay readable/tappable — so temporarily swap in larger dialog fonts (cfg_font/
+        # cfg_small) for the whole dialog draw, then restore. The body reads C.FONT/C.SMALL_FONT
+        # directly, so this one swap rescales every label/field/button with no per-line edits.
+        _sf, _ss = C.FONT, C.SMALL_FONT
+        C.FONT, C.SMALL_FONT = self.cfg_font, self.cfg_small
+        try:
+            self._draw_cfg_popup_body()
+        finally:
+            C.FONT, C.SMALL_FONT = _sf, _ss
+
+    def _draw_cfg_popup_body(self):
         # The dialog has a running vertical cursor `y` so sections stack without hardcoded
         # collisions. Layout: sensor list -> add/remove/dup -> selected-sensor editor (input
         # mode + fields + colour picker) -> map -> smoothing -> action buttons.
