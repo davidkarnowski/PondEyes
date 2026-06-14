@@ -21,7 +21,10 @@ log = get_logger("sound")
 # the whole pygame app at import time (which is what happens on a Pi with audio unconfigured).
 AVAILABLE = False
 try:
-    pygame.mixer.pre_init(44100, -16, 1, 512)
+    # Buffer 2048 (was 512): a larger mixer buffer means fewer underruns, which is the main cause of
+    # the "crackle" on the Pi's PWM headphone jack. (The jack's analog noise floor is hardware; this
+    # cleans up the playback itself.)
+    pygame.mixer.pre_init(44100, -16, 1, 2048)
     pygame.mixer.init()
     AVAILABLE = True
 except pygame.error as exc:
@@ -45,10 +48,20 @@ def beep(freq, dur=0.08, vol=0.5, sr=44100):
         return _SILENT                       # no audio device: silent no-op
     key = (freq, dur)
     if key not in _cache:
+        # Apply a short attack/release envelope so the tone fades in and out instead of starting and
+        # stopping on a hard sample edge — that hard edge is exactly what makes a raw beep "click"/
+        # "pop". With the envelope + the bigger mixer buffer the beep is clean.
+        n   = int(dur * sr)
+        atk = max(1, int(0.005 * sr))            # 5 ms fade-in
+        rel = max(1, int(0.012 * sr))            # 12 ms fade-out
+        def _env(i):
+            if i < atk:     return i / atk
+            if i > n - rel: return max(0.0, (n - i) / rel)
+            return 1.0
         buf = array(
             "h",
-            (int(vol * 32767 * math.sin(2 * math.pi * freq * i / sr))
-             for i in range(int(dur * sr))),
+            (int(vol * 32767 * _env(i) * math.sin(2 * math.pi * freq * i / sr))
+             for i in range(n)),
         )
         s = pygame.mixer.Sound(buffer=buf.tobytes())
         s.set_volume(vol)
