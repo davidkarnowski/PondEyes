@@ -16,6 +16,9 @@ def main():
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default localhost-only; pass 0.0.0.0 to allow LAN clients)")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--fullscreen", action="store_true",
+                    help="open at the display's native resolution (e.g. a Pi touchscreen/kiosk); "
+                         "toggle back with the FULL_SCREEN menu item")
     args = ap.parse_args()
 
     log = setup_logging()            # rotating file (run-logs/) + stderr; PONDEYES_LOG=DEBUG for detail
@@ -23,7 +26,7 @@ def main():
     cfg = config.load()
     log.info("PondEyes start: %d sensor(s), map=%s, sim=%s",
              len(cfg.get("sensors", [])), cfg.get("map"), args.sim)
-    app = gui.RadarGUI(cfg, sim=args.sim)
+    app = gui.RadarGUI(cfg, sim=args.sim, start_fullscreen=args.fullscreen)
 
     if args.serve:
         # Share THIS RadarGUI (it IS a RadarEngine) with a FastAPI server in a daemon thread, so the

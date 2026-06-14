@@ -51,19 +51,30 @@ class RadarGUI(RadarEngine):
     MAX_ZOOM         = 8.0             # viewport zoom ceiling (1.0 = fit-to-window)
 
     # ────────────────────────────────────────────────── INIT
-    def __init__(self, cfg: dict, sim: bool = False) -> None:
+    def __init__(self, cfg: dict, sim: bool = False, start_fullscreen: bool = False) -> None:
         # Engine first: cfg, sensors, store, tracker, readers dict, per-sensor live state, smoothing,
         # stats, lock, watchdog flags. Readers are NOT started here (we start them at the end of
         # __init__, once the render state is ready). sim=True runs simulated readers (no hardware).
         super().__init__(cfg, sim=sim)
 
-        # ―― Pygame window
-        self.screen = pygame.display.set_mode((1100, 750), pygame.RESIZABLE)
+        # ―― Pygame window. Default to a 1100×750 desktop window, but on a smaller panel (e.g. the
+        #    Pi's 800×480 touchscreen) shrink the initial window to ~95% of the display so it isn't
+        #    born larger than the screen. start_fullscreen (the --fullscreen flag) opens at the
+        #    native resolution instead — handy for a Pi kiosk/test rig. The defensive `> 0` check
+        #    matters under SDL_VIDEODRIVER=dummy (headless tests), where display.Info() reports 0×0.
+        if start_fullscreen:
+            self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        else:
+            info = pygame.display.Info()
+            dw, dh = info.current_w, info.current_h
+            w = min(1100, int(dw * 0.95)) if dw > 0 else 1100
+            h = min(750, int(dh * 0.95)) if dh > 0 else 750
+            self.screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
         pygame.display.set_caption("Mini-Radar")
         self.clock = pygame.time.Clock()
 
         # ―― Layout & sensor pose
-        self.full_screen = False
+        self.full_screen = start_fullscreen   # reuse the existing FULL_SCREEN/EXIT_FULL toggle path
         self.map_mode    = False
         self.playback_mode = False
         self.top_pad, self.bottom_pad = C.TOP_PAD_N, C.BOTTOM_PAD_N
