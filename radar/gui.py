@@ -73,6 +73,24 @@ class RadarGUI(RadarEngine):
         pygame.display.set_caption("Mini-Radar")
         self.clock = pygame.time.Clock()
 
+        # ―― Responsive sizing: scale fonts + derived layout to the ACTUAL screen so a small panel
+        #    (e.g. the Pi's 480x800 touchscreen) gets proportionate art/text without editing the ~58
+        #    C.FONT call-sites. Width-driven (portrait-safe) with a floor so text stays touch-readable;
+        #    a desktop window clamps to 1.0 (unchanged).
+        sw, sh = self.screen.get_size()
+        self.ui_scale = max(0.55, min(1.0, min(sw / 1100, sh / 750)))
+        C.apply_scale(self.ui_scale)
+        # The menu keeps its OWN touch-floored font so tap targets never shrink below ~16pt.
+        self.menu_font = pygame.font.SysFont("monospace", max(16, round(18 * self.ui_scale)))
+        # Target readouts keep a readable floor too — the global scale shrank them too far on the Pi.
+        # (Desktop: identical to the old C.FONT/C.SMALL_FONT sizes; small screens: floored up.)
+        self.readout_font = pygame.font.SysFont("monospace", max(16, round(18 * self.ui_scale)))
+        self.recent_font  = pygame.font.SysFont("monospace", max(14, round(14 * self.ui_scale)))
+        # Cursor handling: auto-hide in fullscreen after idle; Touchscreen Mode hides it always.
+        self.CURSOR_IDLE_SEC = 3.0
+        self._last_mouse_active = time.monotonic()
+        self._cursor_visible = True
+
         # ―― Layout & sensor pose
         self.full_screen = start_fullscreen   # reuse the existing FULL_SCREEN/EXIT_FULL toggle path
         self.map_mode    = False
@@ -108,6 +126,7 @@ class RadarGUI(RadarEngine):
         self.night_mode = cfg["night"]
         self.trail_on   = bool(cfg.get("trail_on", True))
         self.debug_on   = bool(cfg.get("debug", False))
+        self.touch_mode = bool(cfg.get("touch_mode", False))   # hide cursor entirely (finger-only)
 
         # ―― Per-sensor diagnostic stats + smoothing params (smoothing_on / smooth_level /
         #    stats_by_sid / motion_hist) are owned by the engine (super().__init__).
@@ -377,7 +396,7 @@ class RadarGUI(RadarEngine):
         self.cfg.update(sound=self.sound_on, night=self.night_mode,
                         trail_duration=self.trail_duration, trail_on=self.trail_on,
                         smoothing_on=self.smoothing_on, smooth_level=self.smooth_level,
-                        debug=self.debug_on)
+                        debug=self.debug_on, touch_mode=self.touch_mode)
 
     # _on_frame and _snapshot_for_render are inherited from RadarEngine.
 
@@ -629,21 +648,52 @@ class RadarGUI(RadarEngine):
         self.reset_zoom_rect = rb
 
     # ───────────────────────────────────────── menu row
+    def _show_logo(self):
+        # The ASCII logo is cosmetic and eats vertical space; drop it on small (scaled) screens.
+        return self.ui_scale >= 0.7
+
     def _menu_row(self):
-        r,x,y={},self.screen.get_width()-10,10
-        def add(label,key,col=C.GREEN):
-            nonlocal x
-            surf=C.FONT.render(label,True,col); rr=surf.get_rect(); rr.topright=(x,y)
-            self.screen.blit(surf,rr); r[key]=rr; x=rr.left-20
-        add("EXIT_FULL" if self.full_screen else "FULL_SCREEN","full")
-        if not self.map_mode: add("MAP","map")
-        add("CONFIG","config")
-        add("TRAIL","trail",C.GREEN if self.trail_on else C.DIM)
-        add("SMOOTH","smooth",C.GREEN if self.smoothing_on else C.DIM)
-        add("NIGHT","night",C.RED if self.night_mode else C.GREEN)
-        add("SOUND","sound",C.GREEN if self.sound_on else C.DIM)
-        add("PLAYBACK","playback")          # an ACTION (not a toggle) -> always green
-        r["h"]=C.FONT.get_height(); self.menu_rects=r
+        # Build (label, key, colour) items. On a WIDE screen they lay out as the historical single
+        # right-aligned row at the top (desktop unchanged). On a NARROW screen (e.g. the Pi panel)
+        # they WRAP into centered rows pulled DOWN off the top edge (the resistive panel's worst
+        # zone), on a faint backing bar, using self.menu_font (touch-floored) so tap targets stay big.
+        items = [("EXIT_FULL" if self.full_screen else "FULL_SCREEN", "full", C.GREEN)]
+        if not self.map_mode: items.append(("MAP", "map", C.GREEN))
+        items += [("CONFIG", "config", C.GREEN),
+                  ("TRAIL", "trail", C.GREEN if self.trail_on else C.DIM),
+                  ("SMOOTH", "smooth", C.GREEN if self.smoothing_on else C.DIM),
+                  ("NIGHT", "night", C.RED if self.night_mode else C.GREEN),
+                  ("SOUND", "sound", C.GREEN if self.sound_on else C.DIM),
+                  ("PLAYBACK", "playback", C.GREEN)]   # PLAYBACK is an action -> always green
+        W, GAP = self.screen.get_width(), 20
+        f = self.menu_font
+        surfs = [(k, f.render(lbl, True, c)) for (lbl, k, c) in items]
+        one_row_w = sum(s.get_width() for _, s in surfs) + GAP * (len(surfs) - 1)
+        r = {}
+        if one_row_w <= W - 20:
+            x, y = W - 10, 10                          # wide/desktop: single right-aligned row
+            for k, s in surfs:
+                rr = s.get_rect(); rr.topright = (x, y); self.screen.blit(s, rr); r[k] = rr; x = rr.left - GAP
+        else:
+            top = (10 + C.ASCII_H + 6) if self._show_logo() else 30   # clear the top edge / logo
+            line_h = f.get_height() + 10
+            rows, cur, cur_w = [], [], 0               # greedy-pack into rows that fit the width
+            for k, s in surfs:
+                w = s.get_width()
+                if cur and cur_w + GAP + w > W - 16:
+                    rows.append(cur); cur, cur_w = [], 0
+                cur.append((k, s)); cur_w += (GAP if cur_w else 0) + w
+            if cur: rows.append(cur)
+            bar = pygame.Surface((W, line_h * len(rows) + 8), pygame.SRCALPHA); bar.fill((0, 0, 0, 160))
+            self.screen.blit(bar, (0, top - 4))
+            y = top
+            for row in rows:
+                row_w = sum(s.get_width() for _, s in row) + GAP * (len(row) - 1)
+                x = (W - row_w) // 2
+                for k, s in row:
+                    rr = s.get_rect(); rr.topleft = (x, y); self.screen.blit(s, rr); r[k] = rr; x = rr.right + GAP
+                y += line_h
+        r["h"] = f.get_height(); self.menu_rects = r
 
     # ───────────────────────────────────────── rotation slider
     def _draw_slider(self, angle):
@@ -842,7 +892,12 @@ class RadarGUI(RadarEngine):
         dbg_col = C.GREEN if self.debug_on else C.DIM
         pygame.draw.rect(self.screen, dbg_col, dbg, 2)
         self.screen.blit(C.SMALL_FONT.render("DEBUG", True, dbg_col), (dbg.x+18, dbg.y+7))
-        self.cfg_buttons.update({"save": save, "cancel": cancel, "debug": dbg,
+        # Touchscreen Mode toggle — hides the cursor entirely; finger/tap still registers as a click
+        touch = pygame.Rect(dbg.right+10, dbg.y, 150, 30)
+        tch_col = C.GREEN if self.touch_mode else C.DIM
+        pygame.draw.rect(self.screen, tch_col, touch, 2)
+        self.screen.blit(C.SMALL_FONT.render("TOUCHSCREEN", True, tch_col), (touch.x+10, touch.y+7))
+        self.cfg_buttons.update({"save": save, "cancel": cancel, "debug": dbg, "touch": touch,
                                  "add": addb, "remove": remb, "dup": dupb,
                                  "sensor_rows": sensor_rows, "set_btns": set_btns})
 
@@ -1077,6 +1132,8 @@ class RadarGUI(RadarEngine):
 
             # ――― EVENTS ―――――――――――――――――――――――――――――――――――――――――――
             for e in pygame.event.get():
+                if e.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                    self._last_mouse_active=time.monotonic()
                 if e.type==pygame.QUIT:
                     running=False
 
@@ -1179,6 +1236,8 @@ class RadarGUI(RadarEngine):
                             self._pick_map_file()
                         elif "debug" in self.cfg_buttons and self.cfg_buttons["debug"].collidepoint(e.pos):
                             self.debug_on = not self.debug_on; self._sync_cfg()
+                        elif "touch" in self.cfg_buttons and self.cfg_buttons["touch"].collidepoint(e.pos):
+                            self.touch_mode = not self.touch_mode; self._sync_cfg()
                         elif self.level_rect.collidepoint(e.pos):
                             self.drag_level=True
                         elif self.sens_rect.collidepoint(e.pos):
@@ -1428,15 +1487,25 @@ class RadarGUI(RadarEngine):
             if self.data_lost and not was_lost:        # data just dropped: clear trails on THIS thread
                 self.trails.clear(); self.pulse_phase.clear()
 
+            # Cursor visibility: Touchscreen Mode hides it always; otherwise auto-hide in fullscreen
+            # after CURSOR_IDLE_SEC idle. Re-shows on any mouse activity / when leaving fullscreen.
+            _hide_cursor = self.touch_mode or (self.full_screen and
+                            time.monotonic()-self._last_mouse_active > self.CURSOR_IDLE_SEC)
+            if _hide_cursor and self._cursor_visible:
+                pygame.mouse.set_visible(False); self._cursor_visible=False
+            elif not _hide_cursor and not self._cursor_visible:
+                pygame.mouse.set_visible(True); self._cursor_visible=True
+
             # ――― DRAWING ――――――――――――――――――――――――――――――
             self.screen.fill(C.BLACK)
             self.screen.blit(self._map_surface(), (self.off_x, self.off_y))   # zoom-scaled map (full-bleed)
 
             # header / menu / clock
             if not self.map_mode:
-                y=10
-                for surf in C.ASCII_SURFS:
-                    self.screen.blit(surf,(10,y)); y+=surf.get_height()
+                if self._show_logo():
+                    y=10
+                    for surf in C.ASCII_SURFS:
+                        self.screen.blit(surf,(10,y)); y+=surf.get_height()
                 self._menu_row()
                 clk=C.BIG_FONT.render(dt.datetime.now().strftime("%H:%M:%S"),True,C.GREEN)
                 self.screen.blit(clk,(self.screen.get_width()-clk.get_width()-10,
@@ -1570,7 +1639,7 @@ class RadarGUI(RadarEngine):
                         pygame.draw.line(self.screen, C.DIM, (px-15, py-9), (px-9, py-15), 1)
                     if not self.map_mode:
                         rng=math.hypot(ax,ay)
-                        self.screen.blit(C.FONT.render(
+                        self.screen.blit(self.readout_font.render(
                             f"{s.id}/{ser}: X={ax/1000:+.2f} Y={ay/1000:+.2f} "
                             f"D={rng/1000:.2f}m v={av/10:.1f}",True,col),(10,dash_y+dash_row*22))
                         dash_row+=1
@@ -1578,7 +1647,7 @@ class RadarGUI(RadarEngine):
             # footer: recent targets across all sensors (prefixed with the source sensor id)
             if not self.map_mode:
                 next_y=dash_y+dash_row*22+5
-                self.screen.blit(C.SMALL_FONT.render("Recent Targets:",True,C.GREEN),
+                self.screen.blit(self.recent_font.render("Recent Targets:",True,C.GREEN),
                                  (10,next_y))
                 for i,tr in enumerate(snap["recent"]):
                     sid=tr.get("serial","—"); src=tr.get("sensor_id","")
@@ -1586,16 +1655,20 @@ class RadarGUI(RadarEngine):
                     txt=(f"{pfx}{sid}: {tr['first'].strftime('%H:%M:%S')}–"
                          f"{tr['last'].strftime('%H:%M:%S')} "
                          f"({str(tr['dur']).split('.')[0]})")
-                    self.screen.blit(C.SMALL_FONT.render(txt,True,C.GREEN),
+                    self.screen.blit(self.recent_font.render(txt,True,C.GREEN),
                                      (10,next_y+20+i*18))
 
             # map exit button
             if self.map_mode:
-                xs=C.MID_FONT.render("X",True,C.GREEN)
-                self.exit_rect=xs.get_rect()
-                self.exit_rect.topright=(self.screen.get_width()-10,10)
-                pygame.draw.rect(self.screen,C.BLACK,self.exit_rect.inflate(8,4))
-                self.screen.blit(xs,self.exit_rect)
+                # Big, finger-friendly EXIT button — the ONLY way out of map mode without a keyboard.
+                # Pulled in from the corner so it clears the panel's bad edge zone.
+                bw, bh = max(70, round(76*self.ui_scale)), max(40, round(44*self.ui_scale))
+                self.exit_rect = pygame.Rect(0, 0, bw, bh)
+                self.exit_rect.topright = (self.screen.get_width()-16, 16)
+                pygame.draw.rect(self.screen, C.BLACK, self.exit_rect)
+                pygame.draw.rect(self.screen, C.GREEN, self.exit_rect, 2)
+                xs = self.menu_font.render("EXIT", True, C.GREEN)
+                self.screen.blit(xs, xs.get_rect(center=self.exit_rect.center))
 
             # debug status line (bottom-left): per-sensor Hz + age, then global active + fps
             if self.debug_on and not self.map_mode:
