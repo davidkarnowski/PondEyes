@@ -39,6 +39,9 @@ It is designed around modular components, each in the `radar/` directory, with a
   color, distance gates, and trail — at the true recorded cadence, so playback looks like the live
   view. The live view and playback share one renderer.
 - Verbose runtime logging (`run-logs/pondeyes.log`; `PONDEYES_LOG=DEBUG` for detail)
+- **Runs as a Raspberry Pi touchscreen appliance** — fullscreen with a responsive UI that scales to
+  small panels (collapsible drop-down menu, touch-sized controls, **Touchscreen Mode**, cursor
+  auto-hide) and **auto-launches on boot**. See the **[Raspberry Pi deployment guide](docs/raspberry-pi.md)**.
 
 ---
 
@@ -47,6 +50,28 @@ It is designed around modular components, each in the `radar/` directory, with a
 over an imported SVG map.](docs/multisensor-demo.png)
 
 *Two sensors on one map — each with its own pose, color, FOV cone, and distance gates.*
+
+---
+
+## Raspberry Pi touchscreen appliance
+
+PondEyes runs as a self-contained appliance on a Raspberry Pi 4 with a small touchscreen — power it
+on and it boots straight into a fullscreen, finger-driven radar view. The interface is
+**responsive**: it scales to the panel and switches to a compact, touch-friendly layout on small
+screens, so it works across a range of displays.
+
+<p align="center">
+  <img src="docs/pi-live-portrait.png" alt="PondEyes fullscreen on a Pi portrait touchscreen" width="270">
+  &nbsp;&nbsp;
+  <img src="docs/pi-dropdown-menu.png" alt="Small-screen collapsible drop-down menu" width="270">
+</p>
+
+Highlights: an auto-scaling layout, a collapsible **☰ menu**, **Touchscreen Mode** (finger-only,
+cursor hidden), an on-screen CONFIG sized for touch, and **boot auto-launch**. Touch is supported
+across the common controller types (USB-HID, I²C Goodix/FT5x06, and SPI resistive ADS7846).
+
+**→ Full setup — including different screens and touch controllers — in the
+[Raspberry Pi deployment guide](docs/raspberry-pi.md).**
 
 ---
 PondEyes Development Demonstration (YouTube):
