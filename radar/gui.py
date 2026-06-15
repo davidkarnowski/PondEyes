@@ -730,6 +730,23 @@ class RadarGUI(RadarEngine):
         return slid
 
     # ───────────────────────────────────────── CONFIG pop-up
+    @staticmethod
+    def _ellipsize(text, font, max_w, front=False):
+        # Truncate `text` with "…" so it fits in max_w px. front=True keeps the TAIL (e.g. the end of
+        # a long /dev/serial/by-id path); front=False keeps the head. Used to stop long CONFIG values
+        # overrunning the (now narrower) dialog on a small screen.
+        if max_w <= 0 or font.size(text)[0] <= max_w:
+            return text
+        if front:
+            t = text
+            while t and font.size("…" + t)[0] > max_w:
+                t = t[1:]
+            return "…" + t
+        t = text
+        while t and font.size(t + "…")[0] > max_w:
+            t = t[:-1]
+        return t + "…"
+
     def _draw_cfg_popup(self):
         # On a small screen the global fonts are scaled tiny for the map view, but the CONFIG modal
         # must stay readable/tappable — so temporarily swap in larger dialog fonts (cfg_font/
@@ -822,8 +839,12 @@ class RadarGUI(RadarEngine):
                 if f in (4, self.MAXRANGE_FIELD, self.MINRANGE_FIELD):
                     continue                       # trail length + range gates rendered specially
                 caret = "▏" if (f == self.cur_field and self.flash) else ""
-                surf = C.SMALL_FONT.render(f"{self.fields[f]}: {self.cfg_input[f]}{caret}",
-                                           True, C.GREEN)
+                # Truncate a long value (e.g. a /dev/serial/by-id path) to the dialog width, keeping
+                # its distinctive tail, so the field never runs off the right edge.
+                prefix = f"{self.fields[f]}: "
+                vmax = (rect.right - 12 - x) - C.SMALL_FONT.size(prefix + "▏")[0]
+                val = self._ellipsize(self.cfg_input[f], C.SMALL_FONT, vmax, front=True)
+                surf = C.SMALL_FONT.render(f"{prefix}{val}{caret}", True, C.GREEN)
                 self.screen.blit(surf, (x, y))
                 self.field_rects[f] = pygame.Rect(x, y, max(surf.get_width(), 220) + 10, 22)
                 y += 24
@@ -861,7 +882,8 @@ class RadarGUI(RadarEngine):
             gate_txt = (f"Distance gates  min {('off' if cur_min<=0 else f'{cur_min:.1f}m')}"
                         f" / max {('off' if cur_max<=0 else f'{cur_max:.1f}m')}"
                         f"   — set via SET SENSOR or drag the arcs on the map")
-            self.screen.blit(C.SMALL_FONT.render(gate_txt, True, C.DIM), (x, y)); y += 24
+            self.screen.blit(C.SMALL_FONT.render(
+                self._ellipsize(gate_txt, C.SMALL_FONT, rect.right - 12 - x), True, C.DIM), (x, y)); y += 24
 
             # Speed sensitivity slider: how readily a "teleporting" target (LD2450 slot reuse)
             # is split into a new track. Off = never; High = strict (indoor). Lower it for fast
