@@ -100,7 +100,11 @@ class RadarGUI(RadarEngine):
         self.full_screen = start_fullscreen   # reuse the existing FULL_SCREEN/EXIT_FULL toggle path
         self.map_mode    = False
         self.playback_mode = False
-        self.top_pad, self.bottom_pad = C.TOP_PAD_N, C.BOTTOM_PAD_N
+        # In small-window mode reserve extra bottom space for the target dashboard (up to 3 live
+        # readouts + "Recent Targets" + 3 recent lines): their fonts are floored so they don't shrink
+        # and would otherwise overrun the bottom edge. Desktop keeps its original pad.
+        self._dash_pad = max(C.BOTTOM_PAD_N, 180) if self.ui_scale < 1.0 else C.BOTTOM_PAD_N
+        self.top_pad, self.bottom_pad = C.TOP_PAD_N, self._dash_pad
         self.svg_surf = None
         self.ppm = 1.0; self.off_x = self.off_y = 0
         self.proj = geometry.Projector(0, 0, 1.0, 0)   # rebuilt in refresh_map()
@@ -1366,7 +1370,7 @@ class RadarGUI(RadarEngine):
                     # map exit
                     if self.map_mode and self.exit_rect.collidepoint(e.pos):
                         self.map_mode=False
-                        self.top_pad=C.TOP_PAD_N; self.bottom_pad=C.BOTTOM_PAD_N
+                        self.top_pad=C.TOP_PAD_N; self.bottom_pad=self._dash_pad
                         self.refresh_map(); continue
 
                     m=self.menu_rects
@@ -1544,8 +1548,13 @@ class RadarGUI(RadarEngine):
                         self.screen.blit(surf,(10,y)); y+=surf.get_height()
                 self._menu_row()
                 clk=C.BIG_FONT.render(dt.datetime.now().strftime("%H:%M:%S"),True,C.GREEN)
-                self.screen.blit(clk,(self.screen.get_width()-clk.get_width()-10,
-                                       self.screen.get_height()-clk.get_height()-10))
+                if self.ui_scale < 1.0:
+                    # Small-window mode: clock TOP-LEFT (the logo is hidden here), clear of the
+                    # bottom-left target dashboard that would overrun it + the top-right MENU button.
+                    self.screen.blit(clk, (10, 10))
+                else:
+                    self.screen.blit(clk,(self.screen.get_width()-clk.get_width()-10,
+                                           self.screen.get_height()-clk.get_height()-10))
 
             # slider / wizard
             if self.rotating_sensor:
