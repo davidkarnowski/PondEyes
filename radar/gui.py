@@ -70,7 +70,7 @@ class RadarGUI(RadarEngine):
             w = min(1100, int(dw * 0.95)) if dw > 0 else 1100
             h = min(750, int(dh * 0.95)) if dh > 0 else 750
             self.screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
-        pygame.display.set_caption("Mini-Radar")
+        pygame.display.set_caption("PondEyes")
         self.clock = pygame.time.Clock()
 
         # ―― Responsive sizing: scale fonts + derived layout to the ACTUAL screen so a small panel
@@ -221,7 +221,7 @@ class RadarGUI(RadarEngine):
         self.playback_mode = True
         RadarPlaybackGUI(self.cfg, preset_track_id).run()    # blocks until the user exits
         self.playback_mode = False
-        pygame.display.set_caption("Mini-Radar")             # playback reset the window title
+        pygame.display.set_caption("PondEyes")             # playback reset the window title
         self._open_inputs()
 
 

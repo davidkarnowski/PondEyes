@@ -39,7 +39,7 @@ HDR_FONT = C.BIG_FONT
 class RadarPlaybackGUI:
     # One self-contained pygame window covering selection + playback.
     def __init__(self, cfg: dict, preset_track_id: int | None = None):
-        pygame.display.set_caption("Mini-Radar – Playback")
+        pygame.display.set_caption("PondEyes – Playback")
         self.screen = pygame.display.set_mode((1100, 750))
         self.clock = pygame.time.Clock()
         self.cfg = cfg

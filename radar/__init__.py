@@ -1,6 +1,6 @@
 # radar package
 # =============
-# Utility modules for the PondEyes Mini-Radar project. v4.0 adds multi-sensor support.
+# Utility modules for the PondEyes project. v4.0 adds multi-sensor support.
 
 __all__ = [
     "constants",
