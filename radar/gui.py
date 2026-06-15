@@ -1646,11 +1646,8 @@ class RadarGUI(RadarEngine):
             # sensor's own pose, and colour it by the sensor (hue) + speed (brightness) via
             # colors.target_color. Work off a lock-safe snapshot of the shared live state.
             now=time.monotonic()
-            dash_y=self.base_off_y+self.base_svg_h+10   # below the map (FIXED; stays put under zoom/pan)
-            if not self.debug_on:                       # debug OFF -> reclaim its bottom row: drop the
-                dash_y += C.SMALL_FONT.get_height()+10   # target details/footer down into that space
             snap=self._snapshot_for_render()
-            dash_row=0
+            active_lines=[]                             # collected in the loop; drawn bottom-anchored below
             any_audible=False; visible_fastest=0.0     # NON-silenced in-range targets drive the beep
             self.target_hits=[]                        # rebuilt each frame for the right-click menu
             for s in self.sensors:
@@ -1686,26 +1683,33 @@ class RadarGUI(RadarEngine):
                     if muted and not ghost:              # mute cue (a ghost's translucency is its own cue)
                         pygame.draw.circle(self.screen, C.DIM, (px-12, py-12), 5, 1)
                         pygame.draw.line(self.screen, C.DIM, (px-15, py-9), (px-9, py-15), 1)
-                    if not self.map_mode:
+                    if not self.map_mode and len(active_lines) < 3:   # max 3 live readouts
                         rng=math.hypot(ax,ay)
-                        self.screen.blit(self.readout_font.render(
+                        active_lines.append((
                             f"{s.id}/{ser}: X={ax/1000:+.2f} Y={ay/1000:+.2f} "
-                            f"D={rng/1000:.2f}m v={av/10:.1f}",True,col),(10,dash_y+dash_row*22))
-                        dash_row+=1
+                            f"D={rng/1000:.2f}m v={av/10:.1f}", col))
 
-            # footer: recent targets across all sensors (prefixed with the source sensor id)
+            # Target dashboard: ANCHORED to the bottom-left and filled UPWARD. Up to 3 live readouts,
+            # then a "Recent Targets" block (header + up to 3 recent rows) that only appears once there
+            # HAVE been targets. So nothing floats when empty and nothing overruns the bottom edge.
             if not self.map_mode:
-                next_y=dash_y+dash_row*22+5
-                self.screen.blit(self.recent_font.render("Recent Targets:",True,C.GREEN),
-                                 (10,next_y))
-                for i,tr in enumerate(snap["recent"]):
-                    sid=tr.get("serial","—"); src=tr.get("sensor_id","")
-                    pfx=f"{src}/" if src else ""
-                    txt=(f"{pfx}{sid}: {tr['first'].strftime('%H:%M:%S')}–"
-                         f"{tr['last'].strftime('%H:%M:%S')} "
-                         f"({str(tr['dur']).split('.')[0]})")
-                    self.screen.blit(self.recent_font.render(txt,True,C.GREEN),
-                                     (10,next_y+20+i*18))
+                recent=list(snap["recent"])[:3]
+                alh=self.readout_font.get_height()+4      # active line height
+                rlh=self.recent_font.get_height()+3       # recent line height
+                hh =self.recent_font.get_height()+8       # "Recent Targets:" header height
+                total=len(active_lines)*alh + ((hh + len(recent)*rlh) if recent else 0)
+                yy=self.screen.get_height()-8-total       # block top (bottom-anchored)
+                for txt,col in active_lines:
+                    self.screen.blit(self.readout_font.render(txt,True,col),(10,yy)); yy+=alh
+                if recent:                                # header ONLY when there are recent entries
+                    self.screen.blit(self.recent_font.render("Recent Targets:",True,C.GREEN),(10,yy)); yy+=hh
+                    for tr in recent:
+                        sid=tr.get("serial","—"); src=tr.get("sensor_id","")
+                        pfx=f"{src}/" if src else ""
+                        txt=(f"{pfx}{sid}: {tr['first'].strftime('%H:%M:%S')}–"
+                             f"{tr['last'].strftime('%H:%M:%S')} "
+                             f"({str(tr['dur']).split('.')[0]})")
+                        self.screen.blit(self.recent_font.render(txt,True,C.GREEN),(10,yy)); yy+=rlh
 
             # map exit button
             if self.map_mode:
