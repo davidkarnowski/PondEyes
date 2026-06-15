@@ -701,7 +701,7 @@ class RadarGUI(RadarEngine):
             if self.menu_open:
                 rowh = f.get_height() + 18                  # generous touch rows
                 pw = max(s.get_width() for _, s in surfs) + 44
-                px = W - 14 - pw; py = btn.bottom + 6
+                px = W - 48 - pw; py = btn.bottom + 6     # shift left of the right-edge zoom slider
                 panel = pygame.Rect(px, py, pw, rowh * len(surfs) + 8)
                 ov = pygame.Surface(panel.size, pygame.SRCALPHA); ov.fill((0, 0, 0, 225))
                 self.screen.blit(ov, panel.topleft); pygame.draw.rect(self.screen, C.GREEN, panel, 2)
