@@ -343,6 +343,14 @@ PondEyes has been analyzed by DeepWiki and the documentation is available for fu
 
 ---
 
+## Sponsorship
+
+NextPCB has sponsored the PondEyes application through the support of PCB manufacturing. We are grateful.
+
+<a href="https://www.nextpcb.com/"><img src="https://www.nextpcb.com/uploads/images/202505/07/1746603675-2518-QAgOoc.png" alt="NextPCB" width="150"></a>
+
+---
+
 Copyright © 2025 David D. Karnowski.
 
 ---
