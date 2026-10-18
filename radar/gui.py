@@ -1346,6 +1346,10 @@ class RadarGUI(RadarEngine):
                     # 'p'-key will toggle the playback mode
                     elif e.key==pygame.K_p:
                         self._launch_playback()
+                    # 'g'-key toggles FUSION view: fused global person IDs (P1, P2, ...)
+                    # vs the raw per-sensor markers (debug/calibration view)
+                    elif e.key==pygame.K_g:
+                        self.fusion_on=not self.fusion_on; self.save_config()
                     # zoom keys: + / - to zoom (about the map centre), 0 to reset to fit
                     elif e.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
                         self._apply_zoom(self.zoom*1.25, self.map_rect.center)
@@ -1366,7 +1370,7 @@ class RadarGUI(RadarEngine):
                         continue
                     if hasattr(pygame, "MULTIGESTURE") and e.type==pygame.MULTIGESTURE:
                         ctr = (int(e.x * self.screen.get_width()), int(e.y * self.screen.get_height()))
-                        self._apply_zoom(self.zoom * (1.0 + e.ddist * 6.0), ctr)   # pinch -> zoom
+                        self._apply_zoom(self.zoom * (1.0 + getattr(e, "ddist", getattr(e, "pinched", 0.0)) * 6.0), ctr)   # pinch -> zoom
                         continue
 
                 # target right-click context menu (Silence, ...)
@@ -1672,7 +1676,49 @@ class RadarGUI(RadarEngine):
             active_lines=[]                             # collected in the loop; drawn bottom-anchored below
             any_audible=False; visible_fastest=0.0     # NON-silenced in-range targets drive the beep
             self.target_hits=[]                        # rebuilt each frame for the right-click menu
-            for s in self.sensors:
+
+            # ── FUSION VIEW ('g' toggles): one marker per PERSON (P1, P2, ...), fused across
+            # all sensors in world-mm. snapshot(now) PREDICTS each track to render time, so
+            # markers glide between 10 Hz sensor frames instead of stepping. Suspect tracks
+            # (single-sensor in multi-sensor coverage — a likely interference/multipath ghost)
+            # are drawn in the translucent "ghost" style. A "×N" suffix shows how many sensors
+            # currently corroborate the person.
+            if self.fusion_on:
+                with self._lock:
+                    self.fusion.tick(now)
+                    people=self.fusion.snapshot(now)
+                for p in people:
+                    pid=p["id"]
+                    px,py=self.mm_to_px(p["x"],p["y"])
+                    av=p["v"]
+                    ghost=(pid in self.ghosted) or p["suspect"]
+                    muted=pid in self.silenced
+                    if not muted and not ghost:
+                        any_audible=True; visible_fastest=max(visible_fastest,av)
+                    self.target_hits.append((px,py,pid))
+                    col=colors.hex_to_rgb(DEFAULT_PALETTE[(int(pid[1:])-1)%len(DEFAULT_PALETTE)])
+                    trail=self.trails.setdefault(pid,collections.deque())
+                    trail.append((p["x"],p["y"],now,col))
+                    while trail and now-trail[0][2]>self.trail_duration:
+                        trail.popleft()
+                    if self.trail_on and not ghost:
+                        proj=[self.mm_to_px(tx,ty)+(tt,tc) for (tx,ty,tt,tc) in trail]
+                        render.draw_trail(self.screen,proj,now,self.trail_duration,skip_pos=(px,py))
+                    ph=self.pulse_phase.get(pid,0.0)+dt_frame
+                    self.pulse_phase[pid]=ph%1.0
+                    lbl=f"{pid}x{p['n_sensors']}" if p["n_sensors"]>1 else pid
+                    render.draw_target(self.screen,px,py,col,pulse=ph,
+                                       speed_norm=min(1.0,av/self.MAX_V),
+                                       label=lbl,font=C.FONT,ghost=ghost)
+                    if muted and not ghost:
+                        pygame.draw.circle(self.screen,C.DIM,(px-12,py-12),5,1)
+                        pygame.draw.line(self.screen,C.DIM,(px-15,py-9),(px-9,py-15),1)
+                    if not self.map_mode and len(active_lines)<3:
+                        active_lines.append((
+                            f"{pid}: X={p['x']/1000:+.2f} Y={p['y']/1000:+.2f} "
+                            f"v={av/1000:.2f}m/s S={p['n_sensors']}",col))
+
+            for s in ([] if self.fusion_on else self.sensors):
                 for (slot,x,y) in snap["latest"].get(s.id, []):
                     ser=snap["slot2ser"].get((s.id, slot))
                     info=snap["active"].get(ser)

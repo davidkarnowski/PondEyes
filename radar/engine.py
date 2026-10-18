@@ -32,6 +32,7 @@ from radar.sensors import Sensor
 from radar.reader_base import make_reader, stop_all_readers
 from radar.store import TrackStore
 from radar.tracking import Tracker, split_speed_for
+from radar.fusion import FusionTracker
 from radar.logging_setup import get_logger
 
 log = get_logger("engine")
@@ -41,6 +42,11 @@ class RadarEngine:
     MAX_V, FOV_DEG = 4000, 120        # speed cap (colour/beep norm); radar field-of-view degrees
     DATA_TIMEOUT_SEC = 1.0            # gap (ALL sensors quiet) that flags global data loss
     MARKER_STALE_SEC = 1.5            # per-sensor: drop a quiet sensor's live markers after this gap
+    CONFIRM_FRAMES = 2                # N-of-M new-track confirmation (see radar.tracking): a new
+                                      # target must be seen this many consecutive frames before a
+                                      # track opens. 2 = one extra frame (~100 ms) — kills the
+                                      # single-frame interference ghosts the radar report documents
+                                      # while staying imperceptible for a real person. 1 = off.
 
     def __init__(self, cfg: dict, store_path=None, sim: bool = False) -> None:
         # cfg is the loaded radar_config.json (schema v2). We never touch pygame here.
@@ -94,6 +100,12 @@ class RadarEngine:
         for s in self.sensors:
             self.store.upsert_sensor(s.to_dict())
         self.tracker = Tracker(self.store)
+
+        # ―― World-frame fusion: merges the per-sensor detections into global "P" person
+        #    tracks (one ID per human across overlapping sensors) with ghost suppression.
+        #    fusion_on=True -> the map draws fused people instead of raw per-sensor dots.
+        self.fusion_on = bool(cfg.get("fusion_on", True))
+        self.fusion = FusionTracker(self.sensors)
 
         # Last reader-open error (a sensor's port/broker failed). The pygame CONFIG dialog and the
         # web API both surface this; "" means all readers opened cleanly.
@@ -166,15 +178,31 @@ class RadarEngine:
             t0 = time.monotonic()
             split = split_speed_for(sensor.speed_sensitivity)   # per-sensor teleport gate
             self.fastest = self.tracker.update(sensor_id, pose, lst, split,
-                                               frame_mono=t_mono, sensor_snapshot=snap)
+                                               frame_mono=t_mono, sensor_snapshot=snap,
+                                               confirm_frames=self.CONFIRM_FRAMES)
             dur = time.monotonic() - t0
             if dur > 0.10:
                 log.warning("slow frame handling for %s: %.0f ms (tracker.update/store write)",
                             sensor_id, dur * 1000)
             # Exclude slots the tracker holds PENDING a split-confirmation (don't draw a teleporting
-            # target at the jumped position for the one confirmation frame).
+            # target at the jumped position for the one confirmation frame) AND slots that are still
+            # PROVISIONAL (a new target awaiting N-of-M confirmation — unconfirmed ghosts stay
+            # invisible and silent).
             self.latest_by_sensor[sensor_id] = [
-                t[:3] for t in lst if (sensor_id, t[0]) not in self.tracker.pending]
+                t[:3] for t in lst if (sensor_id, t[0]) not in self.tracker.pending
+                and (sensor_id, t[0]) not in self.tracker.provisional]
+            # Feed the fusion layer: only CONFIRMED (non-pending/provisional), IN-RANGE
+            # detections, projected to world-mm through this sensor's pose. reported_count
+            # is the sensor's raw slot usage this frame — the fusion suspect test needs to
+            # know whether the sensor still had free target slots (3-target cap).
+            dets_world = [
+                geometry.local_to_world(x, y, pose)
+                for (slot, x, y) in self.latest_by_sensor[sensor_id]
+                if self._in_range(sensor, x, y)]
+            self.fusion.on_sensor_frame(sensor_id, dets_world,
+                                        (sensor.position[0], sensor.position[1]),
+                                        t_mono, reported_count=len(lst))
+            self.fusion.tick(t_mono)
             self.latest = self.latest_by_sensor.get(self.sensors[0].id, []) if self.sensors else []
             self.t_last_frame = now                  # global watchdog (any sensor = "we have data")
             self.data_lost = False
@@ -194,6 +222,7 @@ class RadarEngine:
         # visuals like trails are cleared by the GUI override.)
         with self._lock:
             self.tracker.end_all()
+            self.fusion.end_all()
             self.motion_hist.clear()        # under the lock — _avg_motion also locks, so no race
             self.latest = []
             self.latest_by_sensor = {sid: [] for sid in self.latest_by_sensor}
@@ -292,8 +321,21 @@ class RadarEngine:
         for sid, (count, t_last, times, _hex) in snap["stats"].items():
             hz = (len(times) - 1) / (times[-1] - times[0]) if len(times) >= 2 and times[-1] > times[0] else 0.0
             stats[sid] = {"count": count, "t_last": t_last, "hz": round(hz, 1)}
-        return {"sensors": sensors, "targets": targets, "recent": recent,
-                "stats": stats, "data_lost": self.data_lost}
+            # Frame-health telemetry from the reader (serial readers expose .health): resync
+            # drops, reconnects, connected state, last open/read error. This is what lets the
+            # UI answer "is the sensor bad or is the LINK bad?" without a serial console.
+            r = self.readers.get(sid)
+            h = getattr(r, "health", None)
+            if h:
+                stats[sid].update({"connected": h.get("connected", False),
+                                   "resync_drops": h.get("resync_drops", 0),
+                                   "reconnects": h.get("reconnects", 0),
+                                   "last_error": h.get("last_error", "")})
+        with self._lock:
+            self.fusion.tick(now)
+            people = self.fusion.snapshot(now)
+        return {"sensors": sensors, "targets": targets, "recent": recent, "people": people,
+                "fusion_on": self.fusion_on, "stats": stats, "data_lost": self.data_lost}
 
     # ───────────────────────────────────────── smoothing + gate helpers (shared by both frontends)
     def _win(self) -> int:
@@ -329,6 +371,7 @@ class RadarEngine:
         # BOTH UIs route their config writes through here — settings are stored durably (survive a
         # restart) regardless of which UI made the change.
         self.cfg["sensors"] = [s.to_dict() for s in self.sensors]
+        self.cfg["fusion_on"] = self.fusion_on
         config.save(self.cfg)
 
     # ───────────────────────────────────────── config mutation (the web POST /api/config uses these)
@@ -342,6 +385,7 @@ class RadarEngine:
             if hasattr(s, k):
                 setattr(s, k, v)
         self.store.upsert_sensor(s.to_dict())
+        self.fusion.set_sensors(self.sensors)      # coverage test uses fresh poses/gates
         self.save_config()
         if restart:
             self._open_inputs()
@@ -388,5 +432,6 @@ class RadarEngine:
                 for s in self.sensors}
         for s in self.sensors:
             self.store.upsert_sensor(s.to_dict())
+        self.fusion.set_sensors(self.sensors)      # coverage test uses fresh poses/gates
         self.save_config()          # durable: the backend stores the new sensor set
         self._open_inputs()

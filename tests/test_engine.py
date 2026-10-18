@@ -35,7 +35,10 @@ def test_world_snapshot_projects_to_authoritative_world_mm(tmp_path, monkeypatch
         {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
          "position": [2000, 3000], "heading": 90.0, "max_range_mm": 8000.0}])
     try:
-        eng._on_frame("S1", [(0, 1000, 0, "")], 10.0)     # one frame: local x=1000 (right), y=0
+        # CONFIRM_FRAMES=2: the first sighting is provisional; a second frame at the same
+        # spot confirms it and opens the track (see radar.tracking N-of-M confirmation).
+        eng._on_frame("S1", [(0, 1000, 0, "")], 10.0)     # frame 1: provisional (not rendered)
+        eng._on_frame("S1", [(0, 1000, 0, "")], 10.1)     # frame 2: confirmed
         snap = eng.world_snapshot()
         assert [s["id"] for s in snap["sensors"]] == ["S1"]
         assert len(snap["targets"]) == 1
@@ -54,7 +57,8 @@ def test_world_snapshot_applies_distance_gate(tmp_path, monkeypatch):
         {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
          "position": [0, 0], "heading": 0.0, "max_range_mm": 2000.0}])
     try:
-        eng._on_frame("S1", [(0, 0, 1000, ""), (1, 0, 5000, "")], 10.0)   # 1 m in-range, 5 m out
+        eng._on_frame("S1", [(0, 0, 1000, ""), (1, 0, 5000, "")], 10.0)   # provisional frame
+        eng._on_frame("S1", [(0, 0, 1000, ""), (1, 0, 5000, "")], 10.1)   # confirmed: 1 m in, 5 m out
         snap = eng.world_snapshot()
         assert len(snap["targets"]) == 1                  # the 5 m target is gated out (max 2 m)
     finally:
@@ -67,14 +71,16 @@ def test_data_loss_watchdog_flips_and_recovers(tmp_path, monkeypatch):
         {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
          "position": [0, 0], "heading": 0.0, "max_range_mm": 8000.0}])
     try:
-        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # fresh frame
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # fresh frame (provisional)
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # second frame confirms the track
         assert eng.check_watchdog() is False                        # not stale yet
         assert len(eng.world_snapshot()["targets"]) == 1
         eng.t_last_frame = time.monotonic() - 5.0                   # force an all-quiet gap
         assert eng.check_watchdog() is True                        # flips data_lost + ends tracks
         assert eng.data_lost is True
         assert eng.world_snapshot()["targets"] == []
-        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # a fresh frame recovers
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # a fresh frame recovers...
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # ...and a second re-confirms
         assert eng.data_lost is False
         assert len(eng.world_snapshot()["targets"]) == 1
     finally:
@@ -87,7 +93,8 @@ def test_target_ghost_silence_flags_shared_in_snapshot(tmp_path, monkeypatch):
         {"id": "S1", "label": "S1", "color": "#00ff88", "input_mode": "sim",
          "position": [0, 0], "heading": 0.0, "max_range_mm": 8000.0}])
     try:
-        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # provisional
+        eng._on_frame("S1", [(0, 0, 1000, "")], time.monotonic())   # confirmed
         ser = eng.world_snapshot()["targets"][0]["serial"]
         eng.set_target_flag(ser, ghost=True)                       # backend flag -> visible to any UI
         t = eng.world_snapshot()["targets"][0]

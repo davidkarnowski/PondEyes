@@ -55,8 +55,14 @@ class RadarMQTT(Reader):
         self.worker.start()
 
     def start(self) -> None:
-        # Connect to the broker and let paho run its network loop on its own thread.
-        self.cli.connect(self.host, self.port, 60)
+        # NON-BLOCKING connect: connect_async() only records the target; the actual TCP connect
+        # happens on paho's network thread after loop_start(). This is what keeps app startup
+        # instant when the broker is down/unreachable (a plain connect() would block the caller
+        # for the full TCP timeout). paho's loop also owns RECONNECTION: if the broker drops or
+        # was never up, it retries forever with the backoff configured below, and on_connect
+        # re-subscribes on every (re)connect — so a sensor that comes online later just appears.
+        self.cli.reconnect_delay_set(min_delay=1, max_delay=8)
+        self.cli.connect_async(self.host, self.port, 60)
         self.cli.loop_start()
 
     # Back-compat alias: the current GUI calls connect(); new code should call start().
