@@ -38,6 +38,16 @@ SPLIT_SPEED_PERMISSIVE_MM_S = 15000.0   # gate at the lowest non-off sensitivity
 SPLIT_SPEED_STRICT_MM_S     = 3000.0    # gate at sensitivity 1.0 (~3 m/s, indoor)
 SPLIT_JITTER_MM             = 350.0     # noise margin added to the per-frame allowance
 
+# ── New-track confirmation (N-of-M) ──────────────────────────────────────────────────────
+# The radar characterisation report showed single-frame GHOSTS (mutual interference between
+# 24 GHz modules, multipath flashes) that a naive tracker turns into real tracks: a DB row, a
+# marker on the map, a beep. The fix is to treat a NEW (sensor, slot) as PROVISIONAL until it
+# is seen again close to the same spot — one extra frame (100 ms at 10 Hz) is enough to kill
+# one-frame flashes while being imperceptible for a real person walking in.
+CONFIRM_RADIUS_MM  = 700.0    # a real target's next frame lands within this of the candidate
+                              # (7 m/s at 10 Hz covers a sprinting person with margin)
+CONFIRM_WINDOW_S   = 0.6      # a candidate not re-seen within this window is forgotten
+
 
 def split_speed_for(sensitivity: float):
     # Map a per-sensor speed-sensitivity (0..1) to a max plausible speed in mm/s, or None when
@@ -66,6 +76,11 @@ class Tracker:
         # CONFIRM (real teleport -> new track) or CANCEL (single-frame noise -> resume). The GUI
         # reads this to suppress drawing the slot for the one pending frame.
         self.pending: Dict[Tuple[str, int], Tuple[float, float, str]] = {}
+        # NEW-track candidates awaiting N-of-M confirmation (see CONFIRM_* above):
+        #   (sensor_id, slot) -> (cand_x, cand_y, times_seen, last_seen_mono).
+        # A provisional slot has NO serial, NO DB track, and is NOT rendered — it either gets
+        # confirmed (re-seen nearby) and becomes a real track, or it ages out silently.
+        self.provisional: Dict[Tuple[str, int], Tuple[float, float, int, float]] = {}
         # Continue serial numbering from whatever is already in the DB.
         self.serial_iter = count(self.store.max_serial() + 1)
 
@@ -81,7 +96,8 @@ class Tracker:
                latest: List[Tuple],
                split_speed_mm_s: float = None,
                frame_mono: float = None,
-               sensor_snapshot: dict = None) -> float:
+               sensor_snapshot: dict = None,
+               confirm_frames: int = 1) -> float:
         # Process one frame's worth of targets from `sensor_id`. `sensor_pose` is (x, y, heading)
         # and `sensor_snapshot` the full sensor config — both snapshotted into newly-opened tracks
         # for faithful playback. `frame_mono` is the reader's monotonic capture time (used for the
@@ -124,6 +140,24 @@ class Tracker:
             # (b) Ensure this (sensor, slot) owns a LIVE serial; open a new track if not.
             ser = self.slot2ser.get(key)
             if ser is None or ser not in self.active:
+                # N-of-M confirmation gate for BRAND-NEW slots (confirm_frames > 1): a first
+                # sighting only registers a provisional candidate; the track opens when the
+                # target is re-seen within CONFIRM_RADIUS_MM. One-frame interference ghosts
+                # never come back at the same spot, so they die here — no serial, no DB row,
+                # no marker, no beep.
+                if confirm_frames > 1:
+                    prov = self.provisional.get(key)
+                    if prov is not None and math.hypot(x_mm - prov[0], y_mm - prov[1]) <= CONFIRM_RADIUS_MM:
+                        seen = prov[2] + 1
+                        if seen < confirm_frames:      # still gathering confirmations
+                            self.provisional[key] = (x_mm, y_mm, seen, now_mon)
+                            continue
+                        self.provisional.pop(key, None)   # CONFIRMED -> fall through, open track
+                    else:
+                        # First sighting (or the candidate moved implausibly): (re)start the
+                        # candidate here and wait for the next frame.
+                        self.provisional[key] = (x_mm, y_mm, 1, now_mon)
+                        continue
                 ser = f"T{next(self.serial_iter)}"
                 self.slot2ser[key] = ser
                 self._open_track(sensor_id, sensor_pose, ser, sensor_snapshot, now_mon)
@@ -165,6 +199,11 @@ class Tracker:
         # Drop pending entries whose old track has since expired (slot went quiet mid-wait).
         if self.pending:
             self.pending = {k: v for k, v in self.pending.items() if v[2] in self.active}
+
+        # Age out provisional candidates that were never re-seen (the one-frame ghosts).
+        if self.provisional:
+            self.provisional = {k: v for k, v in self.provisional.items()
+                                if now_mon - v[3] <= CONFIRM_WINDOW_S}
 
         return fastest
 

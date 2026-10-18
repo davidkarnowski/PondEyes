@@ -55,6 +55,7 @@ _DEFAULT = {
     "trail_on": True,
     "smoothing_on": True,
     "smooth_level": 0,
+    "fusion_on": True,      # fuse per-sensor detections into global person IDs (P1, P2, ...)
     "debug": False,
 }
 

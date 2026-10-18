@@ -20,6 +20,9 @@ import serial
 
 from radar import frames
 from radar.reader_base import Reader, FrameCallback
+from radar.logging_setup import get_logger
+
+log = get_logger("serial")
 
 # Every baud the LD2450 supports, plus 921600 for the ESP32 bridge after the throughput fix.
 # Ordered by likelihood so the common cases (bridge 921600, direct module 256000) lock fast.
@@ -64,11 +67,28 @@ class RadarSerial(Reader):
     FTR = frames.FTR
     FLEN = frames.FLEN
 
+    # Reconnect backoff: first retry fast (a replug is usually quick), then ease off so a
+    # permanently-absent port doesn't spin the CPU on a Pi. Capped, never gives up: the radar
+    # characterisation report's top reliability ask is that a sensor that comes back is
+    # picked up WITHOUT restarting the app.
+    RETRY_MIN_S = 1.0
+    RETRY_MAX_S = 8.0
+
     def __init__(self, port: str, baud: int, on_frame: FrameCallback):
         super().__init__(on_frame)
         self.port, self.baud = port, baud
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
+        # Frame-health telemetry (report §"ESP32/üst katman: ölçüm altyapısı"): without these
+        # counters "sensör bozuk mu, hat mı bozuk?" cannot be answered. Written only by the
+        # reader thread; read by the engine's stats snapshot (int reads are atomic in CPython).
+        self.health = {
+            "frames_ok": 0,        # complete, footer-valid frames delivered
+            "resync_drops": 0,     # bytes dropped hunting for a valid frame (bad footer/garbage)
+            "reconnects": 0,       # successful port (re)opens after the first
+            "connected": False,    # port currently open
+            "last_error": "",      # most recent open/read error (shown in CONFIG/web)
+        }
 
     def start(self) -> None:
         self._thread.start()
@@ -79,36 +99,65 @@ class RadarSerial(Reader):
             self._thread.join(timeout=1)
 
     def _loop(self) -> None:
-        # Background thread: pull bytes, find the header, and once a full 30-byte frame is
-        # buffered, validate its footer and hand it off. The buffer carries leftover bytes
-        # between reads so a frame split across two reads is reassembled correctly.
+        # Outer RECONNECT loop: open the port; if the open fails or the port dies mid-read
+        # (USB unplug, ESP32 reboot, brownout), close, back off, and try again until stop().
+        # Startup is therefore fully async — a missing sensor never blocks or kills the app,
+        # and plugging it in later Just Works.
+        opens = 0
+        delay = self.RETRY_MIN_S
+        while not self._stop.is_set():
+            try:
+                with serial.Serial(self.port, self.baud, timeout=0.05) as ser:
+                    opens += 1
+                    if opens > 1:
+                        self.health["reconnects"] += 1
+                        log.info("serial RECONNECTED: %s @ %d (attempt ok)", self.port, self.baud)
+                    self.health["connected"] = True
+                    self.health["last_error"] = ""
+                    delay = self.RETRY_MIN_S           # a good open resets the backoff
+                    self._read_frames(ser)
+            except serial.SerialException as exc:
+                self.health["connected"] = False
+                self.health["last_error"] = str(exc)
+            if self._stop.is_set():
+                break
+            # Interruptible backoff: stop() returns immediately; otherwise wait and retry.
+            if self._stop.wait(delay):
+                break
+            delay = min(delay * 2, self.RETRY_MAX_S)
+        self.health["connected"] = False
+
+    def _read_frames(self, ser) -> None:
+        # Inner READ loop (unchanged framing logic): pull bytes, find the header, and once a
+        # full 30-byte frame is buffered, validate its footer and hand it off. The buffer
+        # carries leftover bytes between reads so a frame split across two reads reassembles.
+        # Raises SerialException to the outer loop when the port dies.
         buf = bytearray()
-        try:
-            with serial.Serial(self.port, self.baud, timeout=0.05) as ser:
-                while not self._stop.is_set():
-                    buf += ser.read(ser.in_waiting or 1)
+        while not self._stop.is_set():
+            buf += ser.read(ser.in_waiting or 1)
 
-                    idx = buf.find(self.HDR)
-                    if idx == -1:
-                        # No header in view yet — keep only the last few bytes in case a
-                        # header straddles the boundary, and wait for more data.
-                        if len(buf) > 3:
-                            del buf[:-3]
-                        continue
+            idx = buf.find(self.HDR)
+            if idx == -1:
+                # No header in view yet — keep only the last few bytes in case a
+                # header straddles the boundary, and wait for more data.
+                if len(buf) > 3:
+                    self.health["resync_drops"] += len(buf) - 3
+                    del buf[:-3]
+                continue
+            if idx > 0:
+                self.health["resync_drops"] += idx     # garbage before the header
 
-                    if len(buf) < idx + self.FLEN:
-                        continue                       # header found but frame incomplete
+            if len(buf) < idx + self.FLEN:
+                continue                       # header found but frame incomplete
 
-                    frame = bytes(buf[idx : idx + self.FLEN])
-                    if frame.endswith(self.FTR):
-                        hex_str = frame.hex()
-                        # Same delivery shape as every reader: (slot, x, y, raw_hex).
-                        tracks = [t + (hex_str,) for t in frames.parse(frame)]
-                        self._on_frame(tracks, time.monotonic())   # stamp at frame arrival
-                        del buf[: idx + self.FLEN]     # consume the frame we just handled
-                    else:
-                        del buf[idx]                   # bad footer -> drop one byte and resync
-        except serial.SerialException:
-            # Port vanished or never opened. Exit quietly; the GUI surfaces "no data" via its
-            # watchdog and the user can re-open the input from CONFIG.
-            pass
+            frame = bytes(buf[idx : idx + self.FLEN])
+            if frame.endswith(self.FTR):
+                hex_str = frame.hex()
+                # Same delivery shape as every reader: (slot, x, y, raw_hex).
+                tracks = [t + (hex_str,) for t in frames.parse(frame)]
+                self.health["frames_ok"] += 1
+                self._on_frame(tracks, time.monotonic())   # stamp at frame arrival
+                del buf[: idx + self.FLEN]     # consume the frame we just handled
+            else:
+                self.health["resync_drops"] += 1
+                del buf[idx]                   # bad footer -> drop one byte and resync
